@@ -1,0 +1,2 @@
+"""Whole-body shadowing configs."""
+

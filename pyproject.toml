@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instinct-mjlab"
+version = "0.1.0"
+description = "InstinctLab migration on top of mjlab using instinct_rl."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "tyro>=1.0.1",
+  "prettytable>=3.0.0",
+  "PyYAML>=6.0",
+  "numpy>=1.24",
+  "gymnasium>=0.29",
+  "opencv-python>=4.8",
+]
+
+[project.scripts]
+instinct-train = "instinct_mjlab.scripts.train:main"
+instinct-play = "instinct_mjlab.scripts.play:main"
+instinct-list-envs = "instinct_mjlab.scripts.list_envs:main"
+instinct-depth-probe = "instinct_mjlab.scripts.depth_probe:main"
+instinct-perceptive-p0-1-7 = "instinct_mjlab.scripts.perceptive_p0_1_7:main"
+
+[project.entry-points."mjlab.tasks"]
+instinct_mjlab = "instinct_mjlab.tasks"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

@@ -1,0 +1,550 @@
+from dataclasses import field, dataclass, MISSING
+
+import mjlab.envs.mdp as mdp
+from mjlab.assets import ArticulationCfg, AssetBaseCfg
+from mjlab.managers import CurriculumTermCfg, EventTermCfg
+from mjlab.managers import ObservationGroupCfg as ObsGroupCfg
+from mjlab.managers import ObservationTermCfg as ObsTermCfg
+from mjlab.managers import RewardTermCfg as RewTermCfg
+from mjlab.managers import SceneEntityCfg
+from mjlab.managers import TerminationTermCfg as DoneTermCfg
+from mjlab.scene import SceneCfg as InteractiveSceneCfg
+from mjlab.sensors import ContactMatch, ContactSensorCfg
+from mjlab.terrains import TerrainImporterCfg
+from mjlab.utils.noise import UniformNoiseCfg
+
+import instinct_mjlab.envs.mdp as instinct_mdp
+from instinct_mjlab.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
+from instinct_mjlab.monitors import (
+    MonitorTermCfg,
+    MotionReferenceMonitorTerm,
+    ShadowingJointPosMonitorTerm,
+    ShadowingJointVelMonitorTerm,
+    ShadowingLinkPosMonitorTerm,
+    ShadowingPositionMonitorTerm,
+    ShadowingRotationMonitorTerm,
+)
+from instinct_mjlab.motion_reference import MotionReferenceManagerCfg
+
+
+@dataclass(kw_only=True)
+class BeyondMimicSceneCfg(InteractiveSceneCfg):
+    """Configuration for the BeyondMimic scene with necessary scene entities as motion reference."""
+
+    env_spacing: float = 4.0
+
+    # robots
+    robot: ArticulationCfg = None  # Set by concrete env cfg subclass
+
+    # robot reference articulation
+    robot_reference: ArticulationCfg = None
+
+    # motion reference
+    motion_reference: MotionReferenceManagerCfg = None  # Set by concrete env cfg subclass
+
+    # terrain
+    terrain: object = field(default_factory=lambda: TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        terrain_generator=None,
+        physics_material=None,
+        visual_material=None,
+    ))
+
+    # lights
+    light: object = field(default_factory=lambda: AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=None,
+    ))
+
+    sky_light: object = field(default_factory=lambda: AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=None,
+    ))
+
+    contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
+        name="contact_forces",
+        primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
+        secondary=ContactMatch(mode="body", pattern="terrain"),
+        fields=("found", "force"),
+        reduce="maxforce",
+        history_length=3,
+        track_air_time=True,
+    ))
+
+    def __post_init__(self):
+        # Bridge Isaac Lab-style class attributes into mjlab entities dict / sensors tuple
+        if self.robot is not None:
+            self.entities["robot"] = self.robot
+        if self.robot_reference is not None:
+            self.entities["robot_reference"] = self.robot_reference
+        if self.contact_forces is not None:
+            self.sensors = (self.contact_forces,)
+
+        if self.motion_reference is None or not self.motion_reference.debug_vis:
+            if "robot_reference" in self.entities:
+                del self.entities["robot_reference"]
+            if hasattr(self, "robot_reference"):
+                delattr(self, "robot_reference")
+
+
+def make_beyondmimic_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg]:
+    """BeyondMimic command configuration following their approach."""
+    return {
+        "position_ref_command": instinct_mdp.PositionRefCommandCfg(
+            realtime_mode=True,
+            current_state_command=False,
+            anchor_frame="robot",
+        ),
+        "rotation_ref_command": instinct_mdp.RotationRefCommandCfg(
+            realtime_mode=True,
+            current_state_command=False,
+            in_base_frame=True,
+            rotation_mode="tannorm",
+        ),
+        "joint_pos_ref_command": instinct_mdp.JointPosRefCommandCfg(current_state_command=False),
+        "joint_vel_ref_command": instinct_mdp.JointVelRefCommandCfg(current_state_command=False),
+    }
+
+
+def make_beyondmimic_actions() -> dict[str, mdp.JointPositionActionCfg]:
+    """Action specifications for the BeyondMimic MDP."""
+    return {
+        "joint_pos": mdp.JointPositionActionCfg(
+            entity_name="robot",
+            actuator_names=(".*",),
+        ),
+    }
+
+
+def make_beyondmimic_observations() -> dict[str, ObsGroupCfg]:
+    """BeyondMimic observation configuration following their approach."""
+    
+    # Policy observations
+    actor_terms = {
+        "joint_pos_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "joint_pos_ref_command"},
+        ),
+        "joint_vel_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "joint_vel_ref_command"},
+        ),
+        "position_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "position_ref_command"},
+            noise=UniformNoiseCfg(n_min=-0.25, n_max=0.25),
+        ),
+        "rotation_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "rotation_ref_command"},
+            noise=UniformNoiseCfg(n_min=-0.05, n_max=0.05),
+        ),
+        "base_lin_vel": ObsTermCfg(
+            func=mdp.base_lin_vel,
+            noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
+        ),
+        "base_ang_vel": ObsTermCfg(
+            func=mdp.base_ang_vel,
+            noise=UniformNoiseCfg(n_min=-0.2, n_max=0.2),
+        ),
+        "joint_pos": ObsTermCfg(
+            func=mdp.joint_pos_rel,
+            noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
+        ),
+        "joint_vel": ObsTermCfg(
+            func=mdp.joint_vel_rel,
+            noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
+        ),
+        "last_action": ObsTermCfg(func=mdp.last_action),
+    }
+
+    # Critic observations
+    critic_terms = {
+        "joint_pos_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "joint_pos_ref_command"},
+        ),
+        "joint_vel_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "joint_vel_ref_command"},
+        ),
+        "position_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "position_ref_command"},
+        ),
+        "rotation_ref": ObsTermCfg(
+            func=mdp.generated_commands,
+            params={"command_name": "rotation_ref_command"},
+        ),
+        "link_pos": ObsTermCfg(
+            func=instinct_mdp.link_pos_b,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="robot",
+                    body_names=MISSING,
+                    preserve_order=True,
+                ),
+            },
+        ),
+        "link_rot": ObsTermCfg(
+            func=instinct_mdp.link_tannorm_b,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="robot",
+                    body_names=MISSING,
+                    preserve_order=True,
+                ),
+            },
+        ),
+        "base_lin_vel": ObsTermCfg(func=mdp.base_lin_vel),
+        "base_ang_vel": ObsTermCfg(func=mdp.base_ang_vel),
+        "joint_pos": ObsTermCfg(func=mdp.joint_pos_rel),
+        "joint_vel": ObsTermCfg(func=mdp.joint_vel_rel),
+        "last_action": ObsTermCfg(func=mdp.last_action),
+    }
+
+    return {
+        "policy": ObsGroupCfg(
+            terms=actor_terms,
+            enable_corruption=True,
+            concatenate_terms=False,
+        ),
+        "critic": ObsGroupCfg(
+            terms=critic_terms,
+            enable_corruption=False,
+            concatenate_terms=False,
+        ),
+    }
+
+
+def make_beyondmimic_rewards() -> dict[str, RewTermCfg | None]:
+    """BeyondMimic reward terms following their approach."""
+    return {
+        "motion_global_root_pos": RewTermCfg(
+            func=instinct_mdp.base_position_tracking_gauss,
+            weight=0.5,
+            params={
+                "tracking_sigma": 0.3,
+                "tracking_torlerance": 0.0,
+            },
+        ),
+        "motion_global_root_ori": RewTermCfg(
+            func=instinct_mdp.base_rot_tracking_gauss,
+            weight=0.5,
+            params={
+                "tracking_sigma": 0.4,
+                "tracking_torlerance": 0.0,
+            },
+        ),
+        "motion_body_pos": RewTermCfg(
+            func=instinct_mdp.link_pos_imitation_gauss,
+            weight=1.0,
+            params={
+                "combine_method": "mean_prod",
+                "in_base_frame": False,
+                "in_relative_world_frame": True,
+                "std": 0.3,
+            },
+        ),
+        "motion_body_ori": RewTermCfg(
+            func=instinct_mdp.link_rot_imitation_gauss,
+            weight=1.0,
+            params={
+                "combine_method": "mean_prod",
+                "in_base_frame": False,
+                "in_relative_world_frame": True,
+                "std": 0.4,
+            },
+        ),
+        "motion_body_lin_vel": RewTermCfg(
+            func=instinct_mdp.link_lin_vel_imitation_gauss,
+            weight=1.0,
+            params={
+                "combine_method": "mean_prod",
+                "std": 1.0,
+            },
+        ),
+        "motion_body_ang_vel": RewTermCfg(
+            func=instinct_mdp.link_ang_vel_imitation_gauss,
+            weight=1.0,
+            params={
+                "combine_method": "mean_prod",
+                "std": 3.14,
+            },
+        ),
+        "action_rate_l2": RewTermCfg(func=mdp.action_rate_l2, weight=-0.1),
+        "joint_limit": RewTermCfg(
+            func=mdp.joint_pos_limits,
+            weight=-10.0,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
+        ),
+        "undesired_contacts": RewTermCfg(
+            func=instinct_mdp.undesired_contacts,
+            weight=-0.1,
+            params={
+                "sensor_cfg": SceneEntityCfg(
+                    "contact_forces",
+                    body_names=[
+                        r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
+                    ],
+                ),
+                "threshold": 1.0,
+            },
+        ),
+    }
+
+
+def make_beyondmimic_events() -> dict[str, EventTermCfg]:
+    """BeyondMimic events config such as termination conditions."""
+    return {
+        "physics_material": EventTermCfg(
+            func=instinct_mdp.randomize_rigid_body_material,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+                "static_friction_range": (0.3, 1.6),
+                "dynamic_friction_range": (0.3, 1.2),
+                "restitution_range": (0.0, 0.5),
+                "num_buckets": 64,
+            },
+        ),
+        "add_joint_default_pos": EventTermCfg(
+            func=instinct_mdp.randomize_default_joint_pos,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+                "offset_distribution_params": (-0.01, 0.01),
+                "operation": "add",
+                "distribution": "uniform",
+            },
+        ),
+        "base_com": EventTermCfg(
+            func=instinct_mdp.randomize_rigid_body_coms,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+                "coms_x_distribution_params": (-0.025, 0.025),
+                "coms_y_distribution_params": (-0.05, 0.05),
+                "coms_z_distribution_params": (-0.05, 0.05),
+                "distribution": "uniform",
+            },
+        ),
+        "push_robot": EventTermCfg(
+            func=mdp.push_by_setting_velocity,
+            mode="interval",
+            interval_range_s=(1.0, 3.0),
+            params={
+                "velocity_range": {
+                    "x": (-0.5, 0.5),
+                    "y": (-0.5, 0.5),
+                    "z": (-0.2, 0.2),
+                    "roll": (-0.52, 0.52),
+                    "pitch": (-0.52, 0.52),
+                    "yaw": (-0.78, 0.78),
+                },
+            },
+        ),
+        "match_motion_ref_with_scene": EventTermCfg(
+            func=instinct_mdp.match_motion_ref_with_scene,
+            mode="startup",
+            params={
+                "motion_ref_cfg": SceneEntityCfg("motion_reference"),
+            },
+        ),
+        "reset_robot": EventTermCfg(
+            func=instinct_mdp.reset_robot_state_by_reference,
+            mode="reset",
+            params={
+                "motion_ref_cfg": SceneEntityCfg("motion_reference"),
+                "asset_cfg": SceneEntityCfg("robot"),
+                "position_offset": [0.0, 0.0, 0.0],
+                "dof_vel_ratio": 1.0,
+                "base_lin_vel_ratio": 1.0,
+                "base_ang_vel_ratio": 1.0,
+                # Pose randomization (+-5cm position, +-6degrees rotation)
+                "randomize_pose_range": {
+                    "x": (-0.05, 0.05),
+                    "y": (-0.05, 0.05),
+                    "z": (-0.01, 0.01),
+                    "roll": (-0.1, 0.1),
+                    "pitch": (-0.1, 0.1),
+                    "yaw": (-0.2, 0.2),
+                },
+                # Velocity randomization (+-0.1 m/s linear, +-0.1 rad/s angular)
+                "randomize_velocity_range": {
+                    "x": (-0.5, 0.5),
+                    "y": (-0.5, 0.5),
+                    "z": (-0.2, 0.2),
+                    "roll": (-0.52, 0.52),
+                    "pitch": (-0.52, 0.52),
+                    "yaw": (-0.78, 0.78),
+                },
+                # Joint position randomization (+-0.1 rad)
+                "randomize_joint_pos_range": (-0.1, 0.1),
+            },
+        ),
+        "bin_fail_counter_smoothing": EventTermCfg(
+            func=instinct_mdp.beyondmimic_bin_fail_counter_smoothing,
+            mode="interval",
+            interval_range_s=(0.02, 0.02),  # every environment step
+            params={
+                "curriculum_name": "beyond_adaptive_sampling",
+            },
+        ),
+    }
+
+
+def make_beyondmimic_curriculum() -> dict[str, CurriculumTermCfg]:
+    """BeyondMimic curriculum terms for the MDP."""
+    return {
+        "beyond_adaptive_sampling": CurriculumTermCfg(  # type: ignore
+            func=instinct_mdp.BeyondMimicAdaptiveWeighting,
+        ),
+    }
+
+
+def make_beyondmimic_terminations() -> dict[str, DoneTermCfg]:
+    """BeyondMimic termination terms for the MDP."""
+    return {
+        "time_out": DoneTermCfg(func=mdp.time_out, time_out=True),
+        "base_pos_too_far": DoneTermCfg(
+            func=instinct_mdp.pos_far_from_ref,
+            time_out=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "reference_cfg": SceneEntityCfg("motion_reference"),
+                "distance_threshold": 0.25,
+                "check_at_keyframe_threshold": -1,
+                "print_reason": False,
+                "height_only": True,
+            },
+        ),
+        "base_pg_too_far": DoneTermCfg(
+            func=instinct_mdp.projected_gravity_far_from_ref,
+            time_out=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "reference_cfg": SceneEntityCfg("motion_reference"),
+                "projected_gravity_threshold": 0.8,  # distance on z-axis of projected gravity
+                "check_at_keyframe_threshold": -1,
+                "print_reason": False,
+            },
+        ),
+        "link_pos_too_far": DoneTermCfg(
+            func=instinct_mdp.link_pos_far_from_ref,
+            time_out=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "reference_cfg": SceneEntityCfg(
+                    "motion_reference",
+                    body_names=[
+                        "left_ankle_roll_link",
+                        "right_ankle_roll_link",
+                        "left_wrist_yaw_link",
+                        "right_wrist_yaw_link",
+                    ],
+                    preserve_order=True,
+                ),
+                "distance_threshold": 0.25,
+                "in_base_frame": False,
+                "check_at_keyframe_threshold": -1,
+                "height_only": True,
+                "print_reason": False,
+            },
+        ),
+        "dataset_exhausted": DoneTermCfg(
+            func=instinct_mdp.dataset_exhausted,
+            time_out=True,
+            params={
+                "reference_cfg": SceneEntityCfg("motion_reference"),
+                "print_reason": False,
+            },
+        ),
+        "out_of_border": DoneTermCfg(
+            func=instinct_mdp.terrain_out_of_bounds,
+            time_out=True,
+            params={"asset_cfg": SceneEntityCfg("robot"), "print_reason": False, "distance_buffer": 0.1},
+        ),
+    }
+
+
+def make_beyondmimic_monitors() -> dict[str, MonitorTermCfg]:
+    """BeyondMimic monitor configuration."""
+    return {
+        "dataset": MonitorTermCfg(
+            func=MotionReferenceMonitorTerm,
+            params=dict(
+                asset_cfg=SceneEntityCfg("motion_reference"),
+                sample_stat_interval=500,
+                top_n_samples=5,
+            ),
+        ),
+        "shadowing_position": MonitorTermCfg(
+            func=ShadowingPositionMonitorTerm,
+            params=dict(
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
+                in_base_frame=True,
+                check_at_keyframe_threshold=0.03,
+            ),
+        ),
+        "shadowing_rotation": MonitorTermCfg(
+            func=ShadowingRotationMonitorTerm,
+            params=dict(
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
+                masking=True,
+            ),
+        ),
+        "shadowing_joint_pos": MonitorTermCfg(
+            func=ShadowingJointPosMonitorTerm,
+            params=dict(
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
+                masking=True,
+            ),
+        ),
+        "shadowing_joint_vel": MonitorTermCfg(
+            func=ShadowingJointVelMonitorTerm,
+            params=dict(
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
+                masking=True,
+            ),
+        ),
+        "shadowing_link_pos": MonitorTermCfg(
+            func=ShadowingLinkPosMonitorTerm,
+            params=dict(
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
+                in_base_frame=True,
+                masking=True,
+            ),
+        ),
+    }
+
+
+@dataclass(kw_only=True)
+class BeyondMimicEnvCfg(InstinctLabRLEnvCfg):
+    """Configuration for the BeyondMimic environment."""
+
+    scene: BeyondMimicSceneCfg = field(default_factory=lambda: BeyondMimicSceneCfg(num_envs=4096))
+    commands: dict = field(default_factory=make_beyondmimic_commands)
+    actions: dict = field(default_factory=make_beyondmimic_actions)
+    observations: dict = field(default_factory=make_beyondmimic_observations)
+    rewards: dict = field(default_factory=make_beyondmimic_rewards)
+    events: dict = field(default_factory=make_beyondmimic_events)
+    curriculum: dict = field(default_factory=make_beyondmimic_curriculum)
+    terminations: dict = field(default_factory=make_beyondmimic_terminations)
+    monitors: dict = field(default_factory=make_beyondmimic_monitors)
+
+    def __post_init__(self):
+        # general settings
+        self.decimation = 4
+        self.episode_length_s = 10.0
+        # simulation settings
+        self.sim.mujoco.timestep = 1.0 / 50.0 / self.decimation
+
+        # All managers are already dicts, no conversion needed!
+        self.run_name = "BeyondMimic"
