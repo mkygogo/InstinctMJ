@@ -1,6 +1,9 @@
 from dataclasses import MISSING, dataclass, field
 from typing import List
 
+import mujoco
+import numpy as np
+
 from mjlab.terrains.terrain_generator_cfg import SubTerrainBaseCfg
 
 from ..height_field.hf_terrains_cfg import PerlinPlaneTerrainCfg
@@ -22,9 +25,6 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
         be above the terrain at (0, 0, t) given any t > 0 and below the terrain at (0, 0, t) given any t < 0.
     - The USER should ensure that the non-flat part of the terrain is within the size of the terrain.
     """
-
-    function: object = mesh_terrains.motion_matched_terrain
-
 
     path: str = MISSING
     """Directory containing both terrains and the motions, so that these can be matched together.
@@ -56,6 +56,170 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
     ```
 
     """
+
+    collision_hfield: bool = False
+    """If True, use a derived MuJoCo hfield for collision while keeping mesh for rendering.
+
+    MuJoCo mesh collision uses convex hulls, which can over-fill non-convex terrain meshes.
+    Enabling this keeps visual mesh fidelity while using a heightfield collision surface.
+    """
+
+    collision_hfield_resolution: float = 0.05
+    """Sampling resolution (meters) used to build the collision hfield from terrain mesh."""
+
+    collision_hfield_normal_z_threshold: float = 0.15
+    """Only faces with normal_z above this threshold contribute to top-surface sampling."""
+
+    collision_hfield_base_thickness_ratio: float = 1.0
+    """Base thickness ratio for the generated collision hfield."""
+
+    face_box_collision: bool = False
+    """If True, replace mesh collision with per-face thin box geoms.
+
+    Root cause: MuJoCo's polyhedral mesh collision model treats the interior of
+    any closed mesh as solid.  Objects near the inner surface (e.g. a robot
+    standing on the floor inside a scanned room) receive negative-dist contacts
+    even when not physically penetrating, causing ``illegal_reset_contact`` to
+    fire immediately after spawn.
+
+    Fix: disable collision on the visual mesh geom and add one thin
+    ``mjGEOM_BOX`` per triangle face, placed on the outward side of the face.
+    Each box only collides from one side, so the robot inside the room is free
+    to move without spurious contacts while still colliding correctly with the
+    floor and walls.
+
+    This is the recommended option for 3D-scanned room / cup-like meshes.
+    Mutually exclusive with ``collision_hfield``.
+    """
+
+    face_box_thickness: float = 0.05
+    """Thickness (meters) of each per-face box geom for ``face_box_collision``.
+
+    The box extends ``face_box_thickness`` along the face outward normal.
+    Larger values give more robust contact detection at the cost of slightly
+    thicker invisible walls.
+    """
+
+    collision_coacd: bool = False
+    """If True, use CoACD approximate convex decomposition for collision geometry.
+
+    This is the recommended option for concave / 3D-scanned meshes (e.g. a
+    scanned room or cup-shaped terrain).  MuJoCo's polyhedral mesh collision
+    treats the *interior* of any closed mesh as solid, so a robot standing
+    inside a scanned room receives spurious contacts.
+
+    CoACD decomposes the mesh into a set of approximate convex hulls.  Each
+    hull is added as a separate ``mjGEOM_MESH`` collision geom (invisible,
+    group 3) while the original mesh is kept for rendering and depth-camera
+    ray-casting (group 2).
+
+    Mutually exclusive with ``collision_hfield`` and ``face_box_collision``.
+    """
+
+    collision_coacd_threshold: float = 0.05
+    """CoACD concavity threshold (lower = more pieces, better fit).
+
+    Typical range: 0.01 (very fine) – 0.1 (coarse).  Default 0.05 balances
+    decomposition quality and the number of resulting convex hulls.
+    """
+
+    collision_coacd_max_convex_hull: int = -1
+    """Maximum number of convex hulls produced by CoACD (-1 = unlimited)."""
+
+    collision_coacd_preprocess_mode: str = "auto"
+    """CoACD pre-processing mode: ``"auto"``, ``"on"``, or ``"off"``."""
+
+    collision_coacd_preprocess_resolution: int = 50
+    """Voxel resolution used during CoACD pre-processing."""
+
+    collision_coacd_resolution: int = 2000
+    """Sampling resolution used inside the CoACD tree search."""
+
+    collision_coacd_mcts_nodes: int = 20
+    """Number of MCTS nodes per iteration in CoACD."""
+
+    collision_coacd_mcts_iterations: int = 150
+    """Number of MCTS iterations in CoACD."""
+
+    collision_coacd_mcts_max_depth: int = 3
+    """Maximum MCTS tree depth in CoACD."""
+
+    collision_coacd_seed: int = 0
+    """Random seed for CoACD (for reproducibility)."""
+
+    collision_coacd_log_level: str = "off"
+    """CoACD logger level (e.g. ``\"error\"`` to suppress verbose info output)."""
+
+    collision_coacd_pca: bool = False
+    """Whether to enable CoACD PCA pre-processing."""
+
+    collision_coacd_merge: bool = False
+    """Whether CoACD merges convex parts after decomposition.
+
+    Keep this False for terrain to reduce collision-vs-visual mismatch ("hover gap")
+    introduced by aggressive part merging.
+    """
+
+    collision_coacd_decimate: bool = False
+    """Whether to decimate each convex hull to max vertex budget."""
+
+    collision_coacd_max_ch_vertex: int = 256
+    """Maximum vertices per convex hull when decimation is enabled."""
+
+    collision_coacd_extrude: bool = False
+    """Whether to extrude neighboring convex hulls along overlapping faces."""
+
+    collision_coacd_extrude_margin: float = 0.01
+    """Extrusion margin used when collision_coacd_extrude=True."""
+
+    collision_coacd_apx_mode: str = "ch"
+    """Approximation mode for CoACD: ``\"ch\"`` or ``\"box\"``."""
+
+    collision_coacd_use_disk_cache: bool = True
+    """If True, persist CoACD decomposition cache to disk for reuse across runs."""
+
+    collision_coacd_cache_dirname: str = ".coacd_cache"
+    """Cache directory name created next to each imported STL file."""
+
+    collision_coacd_prewarm_all: bool = True
+    """If True, precompute missing CoACD caches for all terrains in metadata on first use."""
+
+    collision_coacd_prewarm_workers: int = 0
+    """Worker-process count for CoACD prewarm.
+
+    Set to 0 to use all CPU cores, and 1 to disable multiprocessing.
+    """
+
+    collision_coacd_geom_margin: float = 0.0
+    """MuJoCo collision margin assigned to CoACD hull geoms.
+
+    Keep at 0.0 to reduce visible hover gap from collision margin.
+    """
+
+    collision_coacd_z_offset: float = 0.0
+    """Extra z-offset applied to CoACD collision hull geoms (meters).
+
+    Use a small negative value (e.g. -0.003) if the robot appears to float
+    above the rendered terrain surface.
+    """
+
+    collision_coacd_auto_align_top_surface: bool = True
+    """If True, automatically align CoACD hulls to visual mesh top surface in Z.
+
+    This computes a terrain-specific z correction from the sampled top surface
+    of visual mesh and CoACD collision hulls, then applies it to all hull geoms.
+    """
+
+    collision_coacd_auto_align_resolution: float = 0.04
+    """XY sampling resolution (meters) for CoACD top-surface auto alignment."""
+
+    def function(
+        self,
+        difficulty: float,
+        spec: mujoco.MjSpec,
+        rng: np.random.Generator,
+    ):
+        return mesh_terrains.motion_matched_terrain(self, difficulty, spec, rng)
 
 @dataclass(kw_only=True)
 class PerlinMeshFloatingBoxTerrainCfg(SubTerrainBaseCfg, WallTerrainCfgMixin):

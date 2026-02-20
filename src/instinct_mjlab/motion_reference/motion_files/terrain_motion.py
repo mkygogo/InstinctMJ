@@ -62,17 +62,36 @@ class TerrainMotion(AmassMotion):
 
     def match_scene(self, scene: Scene) -> None:
         terrain = scene.terrain
-        subterrain_specific_cfgs = scene.terrain.subterrain_specific_cfgs
-        terrain_id_to_origins = {t["terrain_id"]: [] for t in self.yaml_data["terrains"]}
-        # Collect all terrain origins in case some subterrains are from the same terrain_file.
-        for row_idx in range(terrain.terrain_origins.shape[0]):
-            for col_idx in range(terrain.terrain_origins.shape[1]):
-                subterrain_cfg = subterrain_specific_cfgs[row_idx * terrain.terrain_origins.shape[1] + col_idx]
-                difficulty = subterrain_cfg.difficulty
-                terrain_idx = int(
-                    min(max(difficulty * len(self.yaml_data["terrains"]), 0), len(self.yaml_data["terrains"]) - 1)
+        subterrain_specific_cfgs = getattr(terrain, "subterrain_specific_cfgs", None)
+        if subterrain_specific_cfgs is None and hasattr(terrain, "terrain_generator"):
+            subterrain_specific_cfgs = getattr(terrain.terrain_generator, "subterrain_specific_cfgs", None)
+        terrain_id_to_origins = {int(t["terrain_id"]): [] for t in self.yaml_data["terrains"]}
+        terrain_origins = terrain.terrain_origins
+        num_rows, num_cols = terrain_origins.shape[0], terrain_origins.shape[1]
+
+        parsed_terrain_ids: list[int] | None = None
+        if subterrain_specific_cfgs is None:
+            parsed_terrain_ids = self._parse_terrain_ids_from_mesh_names(scene)
+            if parsed_terrain_ids is None:
+                raise RuntimeError(
+                    "Failed to match terrain motion with scene: missing subterrain-specific configs and "
+                    "unable to recover terrain ids from generated mesh names."
                 )
-                terrain_id_to_origins[terrain_idx].append(terrain.terrain_origins[row_idx, col_idx])
+
+        # Collect all terrain origins in case some subterrains are from the same terrain_file.
+        for row_idx in range(num_rows):
+            for col_idx in range(num_cols):
+                terrain_linear_idx = row_idx * num_cols + col_idx
+                if subterrain_specific_cfgs is not None:
+                    subterrain_cfg = subterrain_specific_cfgs[terrain_linear_idx]
+                    difficulty = subterrain_cfg.difficulty
+                    terrain_idx = int(
+                        min(max(difficulty * len(self.yaml_data["terrains"]), 0), len(self.yaml_data["terrains"]) - 1)
+                    )
+                else:
+                    assert parsed_terrain_ids is not None
+                    terrain_idx = parsed_terrain_ids[terrain_linear_idx]
+                terrain_id_to_origins[terrain_idx].append(terrain_origins[row_idx, col_idx])
 
         # Set the origins for each motion by _all_motion_terrain_ids.
         for terrain_id, origins in terrain_id_to_origins.items():
@@ -96,6 +115,65 @@ class TerrainMotion(AmassMotion):
                     stacked_origins
                 )
                 self._all_motion_num_selectable_origins[self._all_motion_terrain_ids == terrain_id] = num_origins
+
+    def _parse_terrain_ids_from_mesh_names(self, scene: Scene) -> list[int] | None:
+        """Recover terrain ids from generated motion-matched mesh names.
+
+        This is used when running with native mjlab TerrainImporter/TerrainGenerator, which does not expose
+        subterrain_specific_cfgs.
+        """
+        terrain = scene.terrain
+        if terrain is None or not hasattr(terrain, "spec"):
+            return None
+        num_rows, num_cols = terrain.terrain_origins.shape[0], terrain.terrain_origins.shape[1]
+        expected_count = num_rows * num_cols
+        terrain_ids: list[int] = [-1] * expected_count
+        mesh_prefix = "motion_matched_t"
+
+        # Preferred path: map mesh terrain id back to grid row/col from geom world position.
+        terrain_gen_cfg = getattr(getattr(terrain, "cfg", None), "terrain_generator", None)
+        if terrain_gen_cfg is not None:
+            size_x, size_y = terrain_gen_cfg.size
+            grid_offset_x = -num_rows * size_x * 0.5
+            grid_offset_y = -num_cols * size_y * 0.5
+            for geom in terrain.spec.body("terrain").geoms:
+                mesh_name = getattr(geom, "meshname", "")
+                if not isinstance(mesh_name, str) or not mesh_name.startswith(mesh_prefix):
+                    continue
+                encoded = mesh_name[len(mesh_prefix) :]
+                terrain_id_str = encoded.split("_", 1)[0]
+                try:
+                    terrain_id = int(terrain_id_str)
+                except ValueError:
+                    continue
+                pos_x = float(geom.pos[0])
+                pos_y = float(geom.pos[1])
+                row_idx = int(round((pos_x - grid_offset_x) / size_x))
+                col_idx = int(round((pos_y - grid_offset_y) / size_y))
+                if 0 <= row_idx < num_rows and 0 <= col_idx < num_cols:
+                    terrain_ids[row_idx * num_cols + col_idx] = terrain_id
+
+        # Fallback path: rely on insertion order of motion-matched meshes.
+        if any(tid < 0 for tid in terrain_ids):
+            ordered_terrain_ids: list[int] = []
+            for mesh in terrain.spec.meshes:
+                mesh_name = getattr(mesh, "name", "")
+                if not isinstance(mesh_name, str) or not mesh_name.startswith(mesh_prefix):
+                    continue
+                encoded = mesh_name[len(mesh_prefix) :]
+                terrain_id_str = encoded.split("_", 1)[0]
+                try:
+                    terrain_id = int(terrain_id_str)
+                except ValueError:
+                    continue
+                ordered_terrain_ids.append(terrain_id)
+            if len(ordered_terrain_ids) < expected_count:
+                return None
+            terrain_ids = ordered_terrain_ids[:expected_count]
+
+        if any(tid < 0 for tid in terrain_ids):
+            return None
+        return terrain_ids
 
     def _sample_assigned_env_starting_stub(self, env_ids: Sequence[int] | torch.Tensor | None = None) -> None:
         """Also sample the origins for the given env_ids."""

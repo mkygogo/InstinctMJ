@@ -111,6 +111,8 @@ class FiledTerrainGenerator(TerrainGenerator):
                 spec, world_position, meshes, origin, sub_row, sub_col
             )
         elif num_args == 4:
+            # Record mesh names before calling super so we can identify newly-added mesh geoms.
+            mesh_names_before = {m.name for m in spec.meshes}
             spawn_origin = super()._create_terrain_geom(
                 spec,
                 world_position,
@@ -119,6 +121,20 @@ class FiledTerrainGenerator(TerrainGenerator):
                 sub_row,
                 sub_col,
             )
+            # Collect world-frame mesh for virtual obstacle generation (mirrors legacy path).
+            new_mesh_names = {m.name for m in spec.meshes} - mesh_names_before
+            for geom in spec.body("terrain").geoms:
+                mesh_name = getattr(geom, "meshname", "")
+                if not isinstance(mesh_name, str) or mesh_name not in new_mesh_names:
+                    continue
+                mjs_mesh = spec.mesh(mesh_name)
+                if mjs_mesh is None:
+                    continue
+                verts = np.array(mjs_mesh.uservert, dtype=np.float32).reshape(-1, 3)
+                faces = np.array(mjs_mesh.userface, dtype=np.int32).reshape(-1, 3)
+                geom_pos = np.array(geom.pos, dtype=np.float64)
+                world_mesh = trimesh.Trimesh(vertices=verts + geom_pos, faces=faces, process=False)
+                self._terrain_meshes.append(world_mesh)
         else:
             raise TypeError(
                 f"Unsupported terrain function signature for {type(cfg).__name__}: "

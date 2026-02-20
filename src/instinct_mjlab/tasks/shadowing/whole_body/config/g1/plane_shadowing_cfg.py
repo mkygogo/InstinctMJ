@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 
+import mujoco
 import yaml
 
 import mjlab.envs.mdp as mdp
@@ -24,6 +25,7 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking import mdp as tracking_mdp
 from mjlab.terrains import TerrainImporterCfg
 from mjlab.utils.noise import UniformNoiseCfg
+from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.viewer import ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
@@ -52,6 +54,67 @@ _DATASETS_ROOT = resolve_datasets_root()
 
 _UNDESIRED_CONTACT_SENSOR_NAME = "undesired_contact_forces"
 _SELF_COLLISION_SENSOR_NAME = "self_collision"
+
+
+def _edit_shadowing_scene_spec(spec: mujoco.MjSpec) -> None:
+    """Apply skybox and white-ish ground material for native viewer play."""
+    skybox_texture_name = "whole_body_skybox"
+    ground_texture_name = "whole_body_groundplane"
+    ground_material_name = "whole_body_groundplane"
+
+    sky_rgb_top = (0.98, 0.99, 1.0)
+    sky_rgb_horizon = (0.78, 0.86, 0.95)
+    ground_rgb1 = (0.95, 0.95, 0.95)
+    ground_rgb2 = (0.88, 0.88, 0.88)
+    ground_mark_rgb = (0.80, 0.80, 0.80)
+
+    existing_skybox = None
+    for tex in spec.textures:
+        if tex.type == mujoco.mjtTexture.mjTEXTURE_SKYBOX:
+            existing_skybox = tex
+            break
+    if existing_skybox is not None:
+        existing_skybox.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+        existing_skybox.rgb1[:] = sky_rgb_top
+        existing_skybox.rgb2[:] = sky_rgb_horizon
+        existing_skybox.width = 512
+        existing_skybox.height = 3072
+    else:
+        TextureCfg(
+            name=skybox_texture_name,
+            type="skybox",
+            builtin="gradient",
+            rgb1=sky_rgb_top,
+            rgb2=sky_rgb_horizon,
+            width=512,
+            height=3072,
+        ).edit_spec(spec)
+
+    TextureCfg(
+        name=ground_texture_name,
+        type="2d",
+        builtin="checker",
+        mark="edge",
+        rgb1=ground_rgb1,
+        rgb2=ground_rgb2,
+        markrgb=ground_mark_rgb,
+        width=300,
+        height=300,
+    ).edit_spec(spec)
+    MaterialCfg(
+        name=ground_material_name,
+        texuniform=True,
+        texrepeat=(4, 4),
+        reflectance=0.05,
+        texture=ground_texture_name,
+    ).edit_spec(spec)
+
+    spec.visual.rgba.haze[:] = (0.90, 0.94, 0.98, 1.0)
+    spec.visual.headlight.ambient[:] = (0.45, 0.45, 0.45)
+    spec.visual.headlight.diffuse[:] = (0.75, 0.75, 0.75)
+
+    for geom in spec.body("terrain").geoms:
+        geom.material = ground_material_name
 
 # MOTION_NAME = "AccadRun" # success
 # _hacked_selected_file_ = "ACCAD/Male2Running_c3d/C5 - walk to run_retargetted.npz"
@@ -343,6 +406,7 @@ def _make_scene_cfg(*, play: bool, motion_reference_cfg: MotionReferenceManagerC
             self_collision,
             motion_reference_cfg,
         ),
+        spec_fn=_edit_shadowing_scene_spec,
     )
 
 

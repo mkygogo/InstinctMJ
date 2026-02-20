@@ -38,13 +38,14 @@ class NoisyCameraMixin:  # as a subclass of SensorBase
     def build_noise_pipeline(self):
         self.noise_pipeline: Sequence[ImageNoiseCfg] | list[ImageNoiseCfg] = []
         """Build the noise pipeline based on the configuration."""
+        assert self._device is not None
 
         for noise_name, noise_cfg in self.cfg.noise_pipeline.items():  # type: ignore
             # Check if the noise configuration is valid
             if not isinstance(noise_cfg, ImageNoiseCfg):
                 raise ValueError(f"Invalid noise configuration for {noise_name}: {noise_cfg}")
 
-            noise_cfg.device = self.device
+            noise_cfg.device = self._device
             # Ensure the device is set correctly if the function is not a class
 
             if isinstance(noise_cfg.func, str):
@@ -52,7 +53,7 @@ class NoisyCameraMixin:  # as a subclass of SensorBase
 
             if inspect.isclass(noise_cfg.func):
                 # If the function is a class, instantiate it
-                noise_cfg.func = noise_cfg.func(noise_cfg, num_envs=self.num_instances, device=self.device)
+                noise_cfg.func = noise_cfg.func(noise_cfg, num_envs=self._num_envs, device=self._device)
 
             # Add the noise configuration to the pipeline
             self.noise_pipeline.append(noise_cfg)
@@ -102,15 +103,16 @@ class NoisyCameraMixin:  # as a subclass of SensorBase
 
     def build_history_buffers(self):
         """Build the history buffers for the specified data types."""
+        assert self._device is not None
         self.output_history_buffers: dict[str, AsyncCircularBuffer] = dict()
 
         for data_type, history_length in self.cfg.data_histories.items():
             self.output_history_buffers[data_type] = AsyncCircularBuffer(
-                history_length, self.num_instances, self.device
+                history_length, self._num_envs, self._device
             )
             data_shape = self._camera_data.output[data_type].shape
             self._camera_data.output[f"{data_type}_history"] = torch.zeros(
-                (data_shape[0], history_length, *data_shape[1:]), device=self.device
+                (data_shape[0], history_length, *data_shape[1:]), device=self._device
             )
 
     def update_history_buffers(self, env_ids: torch.Tensor | Sequence[int]):

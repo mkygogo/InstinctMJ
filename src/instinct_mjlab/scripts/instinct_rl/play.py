@@ -292,7 +292,12 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
       "  pip install -e ../instinct_rl"
     )
   configure_torch_backends()
-  os.environ.setdefault("MUJOCO_GL", "egl")
+  viewer_backend = _resolve_viewer_backend(cfg.viewer)
+  # Native viewer should use glfw; headless/video paths should use egl.
+  if viewer_backend == "native":
+    os.environ["MUJOCO_GL"] = "glfw"
+  else:
+    os.environ.setdefault("MUJOCO_GL", "egl")
 
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_instinct_rl_cfg(task_id)
@@ -342,6 +347,7 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
     policy_group=agent_cfg.policy_observation_group,
     critic_group=agent_cfg.critic_observation_group,
   )
+
   viewer_env = _ViewerEnvAdapter(vec_env)
 
   if cfg.agent in {"zero", "random"}:
@@ -379,7 +385,6 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
         export_dir=onnx_output_dir,
       )
 
-  viewer_backend = _resolve_viewer_backend(cfg.viewer)
   rollout_steps = _resolve_rollout_steps(cfg)
 
   if viewer_backend == "native":

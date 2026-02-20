@@ -295,13 +295,14 @@ def randomize_camera_offsets(
         env_ids = torch.arange(env.scene.num_envs, device=sensor._device)
 
     # get the camera pose
-    camera_offset_pos = torch.tensor(list(sensor.cfg.offset.pos), device=sensor._device).repeat(sensor._view.count, 1)
+    num_sensors = sensor.data.pos_w.shape[0]
+    camera_offset_pos = torch.tensor(list(sensor.cfg.offset.pos), device=sensor._device).repeat(num_sensors, 1)
     camera_quat_w = math_utils.convert_camera_frame_orientation_convention(
         torch.tensor([sensor.cfg.offset.rot], device=sensor._device),
         origin=sensor.cfg.offset.convention,
         target="world",
     )
-    camera_offset_quat = camera_quat_w.repeat(sensor._view.count, 1)
+    camera_offset_quat = camera_quat_w.repeat(num_sensors, 1)
     camera_offset_pos = camera_offset_pos[env_ids]
     camera_offset_quat = camera_offset_quat[env_ids]
 

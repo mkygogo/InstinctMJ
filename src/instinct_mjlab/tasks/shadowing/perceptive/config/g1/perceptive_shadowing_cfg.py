@@ -30,7 +30,16 @@ from instinct_mjlab.utils.motion_validation import resolve_datasets_root
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
-MOTION_FOLDER = str(resolve_datasets_root() / "20251116_50cm_kneeClimbStep1")
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEFAULT_MOTION_FOLDER = str(resolve_datasets_root() / "20251116_50cm_kneeClimbStep1")
+MOTION_FOLDER = os.path.expanduser(os.environ.get("INSTINCT_PERCEPTIVE_MOTION_FOLDER", DEFAULT_MOTION_FOLDER))
 
 @dataclass(kw_only=True)
 class TerrainMotionCfg(TerrainMotionCfgBase):
@@ -144,8 +153,8 @@ class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
         self.scene.motion_reference.motion_buffers[MOTION_NAME].metadata_yaml = os.path.join(
             self.scene.motion_reference.motion_buffers[MOTION_NAME].path, "metadata.yaml"
         )
-        PLANE_TERRAIN = False
-        if PLANE_TERRAIN:
+        force_plane_terrain = _env_flag("INSTINCT_PERCEPTIVE_FORCE_PLANE", default=False)
+        if force_plane_terrain:
             self.scene.motion_reference.motion_buffers.pop(MOTION_NAME)
             self.scene.motion_reference.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
             self.scene.terrain.terrain_type = "plane"
@@ -199,15 +208,39 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
         self.curriculum["beyond_adaptive_sampling"] = None
         self.events["bin_fail_counter_smoothing"] = None
         MOTION_NAME = list(self.scene.motion_reference.motion_buffers.keys())[0]
+        play_stub_sampling_strategy = os.environ.get(
+            "INSTINCT_PERCEPTIVE_PLAY_STUB_SAMPLING_STRATEGY", "independent"
+        ).strip()
+        if play_stub_sampling_strategy not in {"independent", "concat_motion_bins"}:
+            raise ValueError(
+                "INSTINCT_PERCEPTIVE_PLAY_STUB_SAMPLING_STRATEGY must be one of "
+                "['independent', 'concat_motion_bins']."
+            )
+        motion_bin_length_override = os.environ.get("INSTINCT_PERCEPTIVE_PLAY_MOTION_BIN_LENGTH_S")
+        if motion_bin_length_override is None:
+            play_motion_bin_length_s = 1.0 if play_stub_sampling_strategy == "concat_motion_bins" else None
+        elif motion_bin_length_override.strip().lower() == "none":
+            play_motion_bin_length_s = None
+        else:
+            play_motion_bin_length_s = float(motion_bin_length_override)
+        play_motion_path = os.environ.get("INSTINCT_PERCEPTIVE_PLAY_MOTION_PATH")
+        if play_motion_path:
+            self.scene.motion_reference.motion_buffers[MOTION_NAME].path = os.path.expanduser(play_motion_path)
         self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_start_from_middle_range = [0.0, 0.0]
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_bin_length_s = None
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = "independent"
+        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_bin_length_s = play_motion_bin_length_s
+        self.scene.motion_reference.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = (
+            play_stub_sampling_strategy
+        )
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].path = (
         #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
         # )
         self.scene.motion_reference.motion_buffers[MOTION_NAME].metadata_yaml = os.path.join(
             self.scene.motion_reference.motion_buffers[MOTION_NAME].path, "metadata.yaml"
         )
+        force_plane_in_play = _env_flag("INSTINCT_PERCEPTIVE_PLAY_FORCE_PLANE", default=False)
+        if force_plane_in_play:
+            self.scene.terrain.terrain_type = "plane"
+            self.scene.terrain.terrain_generator = None
         if self.scene.terrain.terrain_type == "hacked_generator":
             self.scene.terrain.terrain_generator.sub_terrains["motion_matched"].path = (
                 self.scene.motion_reference.motion_buffers[MOTION_NAME].path
@@ -217,8 +250,9 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
             )
 
         # Use non-terrain-matching motion and plane to hack the scene.
-        self.scene.terrain.terrain_generator.num_rows = 6
-        self.scene.terrain.terrain_generator.num_cols = 6
+        if self.scene.terrain.terrain_generator is not None:
+            self.scene.terrain.terrain_generator.num_rows = 6
+            self.scene.terrain.terrain_generator.num_cols = 6
         # self.scene.motion_reference.motion_buffers.pop(MOTION_NAME)
         # self.scene.motion_reference.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
         # self.scene.motion_reference.motion_buffers["AMASSMotion"].motion_start_from_middle_range = [0.0, 0.0]

@@ -41,7 +41,7 @@ def get_joint_pos_diff_to_cmd(
     asset: Articulation = env.scene[asset_cfg.name]
 
     # obtain the joint position of the robot
-    joint_pos = asset.data.joint_pos
+    joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
     # obtain the reference joint position from the command
     ref_joint_pos = command_term.command[command_term.ALL_INDICES, command_term.aiming_frame_idx]
 
@@ -65,7 +65,7 @@ def get_joint_vel_diff_to_cmd(
     asset: Articulation = env.scene[asset_cfg.name]
 
     # obtain the joint velocity of the robot
-    joint_vel = asset.data.joint_vel
+    joint_vel = asset.data.joint_vel[:, asset_cfg.joint_ids]
     # obtain the reference joint velocity from the command
     ref_joint_vel = command_term.command[command_term.ALL_INDICES, command_term.aiming_frame_idx]
 

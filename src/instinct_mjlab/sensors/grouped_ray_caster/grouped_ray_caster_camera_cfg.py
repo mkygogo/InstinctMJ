@@ -51,8 +51,23 @@ class GroupedRayCasterCameraCfg(GroupedRayCasterCfg):
       for ``distance_to_image_plane`` data type.
     """
 
-    pattern_cfg: PinholeCameraPatternCfg = None
+    pattern: PinholeCameraPatternCfg = field(default_factory=PinholeCameraPatternCfg)
     """The pattern that defines the local ray starting positions and directions in a pinhole camera pattern."""
+
+    focal_length: float | None = None
+    """Optional focal length for aperture-based intrinsic construction."""
+
+    horizontal_aperture: float | None = None
+    """Optional horizontal aperture for aperture-based intrinsic construction."""
+
+    vertical_aperture: float | None = None
+    """Optional vertical aperture for aperture-based intrinsic construction."""
+
+    horizontal_aperture_offset: float = 0.0
+    """Horizontal aperture offset in aperture-based intrinsic construction."""
+
+    vertical_aperture_offset: float = 0.0
+    """Vertical aperture offset in aperture-based intrinsic construction."""
 
     visualizer_cfg: VisualizationMarkersCfg = field(default_factory=lambda: VisualizationMarkersCfg(
         prim_path="/Visuals/RayCaster",
@@ -68,7 +83,5 @@ class GroupedRayCasterCameraCfg(GroupedRayCasterCfg):
     ))
 
     def __post_init__(self):
-        # for cameras, this quantity should be False always.
-        self.attach_yaw_only = False
-        self.pattern = self.pattern_cfg
-        super().__post_init__()
+        # Camera rays should use full frame orientation.
+        self.ray_alignment = "base"

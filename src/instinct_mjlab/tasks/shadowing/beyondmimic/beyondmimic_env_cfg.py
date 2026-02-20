@@ -1,5 +1,6 @@
 from dataclasses import field, dataclass, MISSING
 
+import mujoco
 import mjlab.envs.mdp as mdp
 from mjlab.assets import ArticulationCfg, AssetBaseCfg
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
@@ -11,6 +12,7 @@ from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg as InteractiveSceneCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.terrains import TerrainImporterCfg
+from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.utils.noise import UniformNoiseCfg
 
 import instinct_mjlab.envs.mdp as instinct_mdp
@@ -54,6 +56,69 @@ _UNDESIRED_CONTACT_BODY_NAMES = (
     "right_wrist_roll_link",
     "right_wrist_pitch_link",
 )
+
+
+def _edit_beyondmimic_scene_spec(spec: mujoco.MjSpec) -> None:
+    """Apply skybox and ground material to match the original InstinctLab scene look."""
+    skybox_texture_name = "beyondmimic_skybox"
+    ground_texture_name = "beyondmimic_groundplane"
+    ground_material_name = "beyondmimic_groundplane"
+
+    # Bright sky theme so native viewer doesn't look like a black void.
+    sky_rgb_top = (0.98, 0.99, 1.0)
+    sky_rgb_horizon = (0.78, 0.86, 0.95)
+    # White-ish checker ground instead of the default blue checker.
+    ground_rgb1 = (0.95, 0.95, 0.95)
+    ground_rgb2 = (0.88, 0.88, 0.88)
+    ground_mark_rgb = (0.80, 0.80, 0.80)
+
+    existing_skybox = None
+    for tex in spec.textures:
+        if tex.type == mujoco.mjtTexture.mjTEXTURE_SKYBOX:
+            existing_skybox = tex
+            break
+    if existing_skybox is not None:
+        existing_skybox.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+        existing_skybox.rgb1[:] = sky_rgb_top
+        existing_skybox.rgb2[:] = sky_rgb_horizon
+        existing_skybox.width = 512
+        existing_skybox.height = 3072
+    else:
+        TextureCfg(
+            name=skybox_texture_name,
+            type="skybox",
+            builtin="gradient",
+            rgb1=sky_rgb_top,
+            rgb2=sky_rgb_horizon,
+            width=512,
+            height=3072,
+        ).edit_spec(spec)
+
+    TextureCfg(
+        name=ground_texture_name,
+        type="2d",
+        builtin="checker",
+        mark="edge",
+        rgb1=ground_rgb1,
+        rgb2=ground_rgb2,
+        markrgb=ground_mark_rgb,
+        width=300,
+        height=300,
+    ).edit_spec(spec)
+    MaterialCfg(
+        name=ground_material_name,
+        texuniform=True,
+        texrepeat=(4, 4),
+        reflectance=0.05,
+        texture=ground_texture_name,
+    ).edit_spec(spec)
+
+    spec.visual.rgba.haze[:] = (0.90, 0.94, 0.98, 1.0)
+    spec.visual.headlight.ambient[:] = (0.45, 0.45, 0.45)
+    spec.visual.headlight.diffuse[:] = (0.75, 0.75, 0.75)
+
+    for geom in spec.body("terrain").geoms:
+        geom.material = ground_material_name
 
 
 @dataclass(kw_only=True)
@@ -106,6 +171,8 @@ class BeyondMimicSceneCfg(InteractiveSceneCfg):
     ))
 
     def __post_init__(self):
+        if self.spec_fn is None:
+            self.spec_fn = _edit_beyondmimic_scene_spec
         # Bridge Isaac Lab-style class attributes into mjlab entities dict / sensors tuple
         if self.robot is not None:
             self.entities["robot"] = self.robot

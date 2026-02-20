@@ -125,6 +125,7 @@ class illegal_reset_contact(ManagerTermBase):
         self.threshold = cfg.params["threshold"]
         self.sensor_cfg = cfg.params.get("sensor_cfg", None)
         self.sensor_name = cfg.params.get("sensor_name", None)
+        self.asset_cfg = cfg.params.get("asset_cfg", None)
         self.print_reason = cfg.params.get("print_reason", False)
         self.episode_length_threshold = cfg.params.get("episode_length_threshold", 1)
         self.illegal_contact_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.int)
@@ -135,6 +136,7 @@ class illegal_reset_contact(ManagerTermBase):
         threshold: float,
         sensor_cfg: SceneEntityCfg | None = None,
         sensor_name: str | None = None,
+        asset_cfg: SceneEntityCfg | None = None,
         print_reason: bool = False,
         episode_length_threshold: int = 1,
     ) -> torch.Tensor:
@@ -143,18 +145,34 @@ class illegal_reset_contact(ManagerTermBase):
         """
         if sensor_name is not None:
             contact_sensor: ContactSensor = env.scene.sensors[sensor_name]
-            force = contact_sensor.data.force
-            if force is None:
-                contacts = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+            force_history = contact_sensor.data.force_history
+            if force_history is not None:
+                force_mag = torch.max(torch.norm(force_history, dim=-1), dim=-1)[0]  # [B, N]
             else:
-                contacts = torch.any(torch.norm(force, dim=-1) > threshold, dim=1)
+                force = contact_sensor.data.force
+                if force is None:
+                    contacts = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+                    force_mag = None
+                else:
+                    force_mag = torch.norm(force, dim=-1)  # [B, N]
+            if force_mag is not None:
+                if asset_cfg is not None:
+                    force_mag = force_mag[:, asset_cfg.body_ids]
+                contacts = torch.any(force_mag > threshold, dim=1)
         else:
             assert sensor_cfg is not None, "Either sensor_name or sensor_cfg must be provided."
             contact_sensor = env.scene.sensors[sensor_cfg.name]
-            net_contact_forces = contact_sensor.data.net_forces_w_history
-            contacts = torch.any(
-                torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold, dim=1
-            )
+            force_history = contact_sensor.data.force_history
+            if force_history is not None:
+                force_mag = torch.max(torch.norm(force_history, dim=-1), dim=-1)[0]  # [B, N]
+            else:
+                force = contact_sensor.data.force
+                if force is None:
+                    force_mag = torch.zeros((env.num_envs, 0), device=env.device, dtype=torch.float)
+                else:
+                    force_mag = torch.norm(force, dim=-1)
+            force_mag = force_mag[:, sensor_cfg.body_ids]
+            contacts = torch.any(force_mag > threshold, dim=1)
         self.illegal_contact_counter += contacts.int()
         return_ = torch.logical_and(
             self.illegal_contact_counter >= episode_length_threshold,

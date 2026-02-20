@@ -9,26 +9,20 @@ import cv2
 from mjlab.utils.lab_api import math as math_utils
 from mjlab.managers import ManagerTermBase, ManagerTermBaseCfg, SceneEntityCfg
 
-try:
-    from mjlab.envs.mdp.events import (  # This could be dangerous for code maintainability. Maybe optimize this import later.
-        _randomize_prop_by_op,
-    )
-except ImportError:
-
-    def _randomize_prop_by_op(
-        data: torch.Tensor,
-        distribution_parameters: tuple[int, int],
-        *_,
-        distribution: Literal["uniform", "log_uniform"] = "uniform",
-        **__,
-    ) -> torch.Tensor:
-        low, high = distribution_parameters
-        if distribution == "log_uniform":
-            log_low = float(np.log(max(low, 1)))
-            log_high = float(np.log(max(high + 1, 1)))
-            sampled = torch.exp(torch.rand(data.shape, device=data.device) * (log_high - log_low) + log_low)
-            return torch.floor(sampled).to(data.dtype)
-        return torch.randint(low, high + 1, data.shape, device=data.device, dtype=torch.int64).to(data.dtype)
+def _randomize_prop_by_op(
+    data: torch.Tensor,
+    distribution_parameters: tuple[int, int],
+    *_,
+    distribution: Literal["uniform", "log_uniform"] = "uniform",
+    **__,
+) -> torch.Tensor:
+    low, high = distribution_parameters
+    if distribution == "log_uniform":
+        log_low = float(np.log(max(low, 1)))
+        log_high = float(np.log(max(high + 1, 1)))
+        sampled = torch.exp(torch.rand(data.shape, device=data.device) * (log_high - log_low) + log_low)
+        return torch.floor(sampled).to(data.dtype)
+    return torch.randint(low, high + 1, data.shape, device=data.device, dtype=torch.int64).to(data.dtype)
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv as ManagerBasedEnv
@@ -52,6 +46,7 @@ def _debug_visualize_image(
     image: torch.Tensor,
     scale_up_vis: int = 5,
     window_name: str = "vis_image",
+    invert: bool = False,
 ) -> None:
     """Visualize images in a cv2 window for debugging purposes.
 
@@ -63,13 +58,21 @@ def _debug_visualize_image(
         scale_up_vis: The factor to scale up the image for better visualization if the
             resolution is too low. Defaults to 5.
         window_name: The name of the OpenCV window. Defaults to "vis_image".
+        invert: Whether to invert the image (e.g. for depth: close=bright, far=dark).
+            Defaults to False.
     """
     if not _CV2_GUI_AVAILABLE:
         return
+    img_tensor = image.float()
+    img_max = img_tensor.max()
     # automatically normalize images to [0, 255]
-    img = (image * 255.0 / image.max()).cpu().numpy().astype("uint8")  # (H, W)
+    if img_max > 0:
+        img_tensor = img_tensor * 255.0 / img_max
+    if invert:
+        img_tensor = 255.0 - img_tensor
+    img = img_tensor.cpu().numpy().astype("uint8")  # (H, W)
     # Scale up the image for better visualization
-    img = cv2.resize(img, (img.shape[1] * scale_up_vis, img.shape[0] * scale_up_vis), interpolation=cv2.INTER_AREA)
+    img = cv2.resize(img, (img.shape[1] * scale_up_vis, img.shape[0] * scale_up_vis), interpolation=cv2.INTER_NEAREST)
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.imshow(window_name, img)
     cv2.waitKey(1)
@@ -131,10 +134,12 @@ def visualizable_image(
 
     if debug_vis:
         # (N, C, H, W) -> (C, H, N, W) -> (C*H, N*W)
+        # Show the processed policy-input image (InstinctLab convention: black=near, white=far)
         _debug_visualize_image(
-            images.permute(1, 2, 0, 3).flatten(start_dim=0, end_dim=1).flatten(start_dim=1, end_dim=2), scale_up_vis
+            images.permute(1, 2, 0, 3).flatten(start_dim=0, end_dim=1).flatten(start_dim=1, end_dim=2),
+            scale_up_vis,
+            window_name="depth_image",
         )
-
     return images
 
 

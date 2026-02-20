@@ -952,8 +952,11 @@ def undesired_contacts(
     
     # Filter by body_ids if asset_cfg is provided (like Isaac Lab)
     if asset_cfg is not None:
-        # Resolve body_ids from asset_cfg
-        body_ids = asset_cfg.resolve(env.scene).body_ids
+        # Manager resolves SceneEntityCfg once during setup; avoid resolving every step.
+        body_ids = asset_cfg.body_ids
+        if asset_cfg.body_names is not None and isinstance(body_ids, slice):
+            asset_cfg.resolve(env.scene)
+            body_ids = asset_cfg.body_ids
         # Index only the specified bodies
         is_contact = is_contact[:, body_ids]
     

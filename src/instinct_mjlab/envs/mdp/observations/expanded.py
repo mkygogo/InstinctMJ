@@ -4,13 +4,8 @@ import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from mjlab.envs.mdp import base_ang_vel, joint_pos_rel, last_action, projected_gravity
+from mjlab.envs.mdp import base_ang_vel, joint_pos_rel, joint_vel_rel as joint_vel, last_action, projected_gravity
 from mjlab.managers import ManagerTermBase, SceneEntityCfg
-
-try:
-    from mjlab.envs.mdp import joint_vel
-except ImportError:
-    from mjlab.envs.mdp import joint_vel_rel as joint_vel
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv as ManagerBasedEnv

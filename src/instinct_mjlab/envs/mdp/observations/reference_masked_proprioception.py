@@ -18,16 +18,12 @@ if TYPE_CHECKING:
 
     from instinct_mjlab.motion_reference import MotionReferenceManager
 
-try:
-    from mjlab.envs.mdp import joint_pos
-except ImportError:
-
-    def joint_pos(
-        env: ManagerBasedEnv,
-        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ) -> torch.Tensor:
-        asset = env.scene[asset_cfg.name]
-        return asset.data.joint_pos[:, asset_cfg.joint_ids]
+def joint_pos(
+    env: ManagerBasedEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids]
 
 
 def joint_pos_reference_masked(

@@ -2,6 +2,7 @@ from dataclasses import field, dataclass, MISSING
 import math
 import os
 
+import mujoco
 import mjlab.envs.mdp as mdp
 import mjlab.sim as sim_utils
 from mjlab.assets import ArticulationCfg, AssetBaseCfg
@@ -14,9 +15,11 @@ from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg as InteractiveSceneCfg
 from mjlab.sensors import ContactMatch, ContactSensorCfg, ObjRef, RayCasterCfg, patterns
 from mjlab.terrains import FlatPatchSamplingCfg
+from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.utils.noise import UniformNoiseCfg
 
 import instinct_mjlab.envs.mdp as instinct_mdp
+from instinct_mjlab.assets.unitree_g1 import G1_29DOF_INSTINCTLAB_JOINT_ORDER
 from instinct_mjlab.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mjlab.monitors import (
     MonitorTermCfg,
@@ -47,6 +50,92 @@ from instinct_mjlab.utils.noise import (
 
 # PROPRIO_HISTORY_LENGTH = 0
 PROPRIO_HISTORY_LENGTH = 8
+_UNDESIRED_CONTACT_BODY_REGEX = (
+    r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
+)
+
+
+def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
+    """Apply skybox and terrain material to match the original InstinctLab scene look."""
+    skybox_texture_name = "perceptive_skybox"
+    ground_texture_name = "perceptive_groundplane"
+    ground_material_name = "perceptive_groundplane"
+
+    # Bright sky theme so native viewer doesn't look like a black void.
+    sky_rgb_top = (0.98, 0.99, 1.0)
+    sky_rgb_horizon = (0.78, 0.86, 0.95)
+    # White-ish checker ground instead of the default blue checker.
+    ground_rgb1 = (0.95, 0.95, 0.95)
+    ground_rgb2 = (0.88, 0.88, 0.88)
+    ground_mark_rgb = (0.80, 0.80, 0.80)
+
+    # If a skybox already exists in the attached specs, patch it directly.
+    # Otherwise, create one.
+    existing_skybox = None
+    for tex in spec.textures:
+        if tex.type == mujoco.mjtTexture.mjTEXTURE_SKYBOX:
+            existing_skybox = tex
+            break
+    if existing_skybox is not None:
+        existing_skybox.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+        existing_skybox.rgb1[:] = sky_rgb_top
+        existing_skybox.rgb2[:] = sky_rgb_horizon
+        existing_skybox.width = 512
+        existing_skybox.height = 3072
+    else:
+        TextureCfg(
+            name=skybox_texture_name,
+            type="skybox",
+            builtin="gradient",
+            rgb1=sky_rgb_top,
+            rgb2=sky_rgb_horizon,
+            width=512,
+            height=3072,
+        ).edit_spec(spec)
+
+    TextureCfg(
+        name=ground_texture_name,
+        type="2d",
+        builtin="checker",
+        mark="edge",
+        rgb1=ground_rgb1,
+        rgb2=ground_rgb2,
+        markrgb=ground_mark_rgb,
+        width=300,
+        height=300,
+    ).edit_spec(spec)
+    MaterialCfg(
+        name=ground_material_name,
+        texuniform=True,
+        texrepeat=(4, 4),
+        reflectance=0.05,
+        texture=ground_texture_name,
+    ).edit_spec(spec)
+
+    spec.visual.rgba.haze[:] = (0.90, 0.94, 0.98, 1.0)
+    spec.visual.headlight.ambient[:] = (0.45, 0.45, 0.45)
+    spec.visual.headlight.diffuse[:] = (0.75, 0.75, 0.75)
+    # Increase shadow map resolution to eliminate jagged shadow edges (default is 4096).
+    spec.visual.quality.shadowsize = 8192
+
+    terrain_body = spec.body("terrain")
+    for geom in terrain_body.geoms:
+        geom.material = ground_material_name
+
+    # Ensure reference robot never participates in contacts.
+    # Some G1 XML geoms are unnamed, so name-pattern CollisionCfg cannot reliably
+    # disable all reference collisions in this task.
+    for geom in spec.geoms:
+        parent = geom.parent
+        if parent is None:
+            continue
+        body_name = parent.name or ""
+        if body_name.startswith("robot_reference/"):
+            geom.contype = 0
+            geom.conaffinity = 0
+            # Move reference robot to a non-raycast geom group so depth/height rays
+            # do not observe motion reference and get distracted.
+            geom.group = 3
 
 
 @dataclass(kw_only=True)
@@ -77,11 +166,26 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
             border_height=0.0,
             num_rows=7,
             num_cols=7,
+            add_lights=True,
             sub_terrains={
                 "motion_matched": MotionMatchedTerrainCfg(
                     proportion=1.0,
                     path="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
                     metadata_yaml="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
+                    # Use CoACD convex decomposition for concave / 3D-scanned STL terrains.
+                    # MuJoCo's polyhedral mesh collision treats the interior of a closed mesh
+                    # as solid, causing spurious contacts when the robot is inside a scanned room.
+                    # CoACD decomposes the mesh into approximate convex hulls so that only the
+                    # actual surface participates in collision.
+                    collision_coacd=True,
+                    # Keep to stable CoACD defaults and align collision top surface to visual mesh.
+                    collision_coacd_log_level="off",
+                    collision_coacd_use_disk_cache=True,
+                    collision_coacd_prewarm_all=True,
+                    collision_coacd_prewarm_workers=0,
+                    collision_coacd_geom_margin=0.0,
+                    collision_coacd_z_offset=0.0,
+                    collision_coacd_auto_align_top_surface=True,
                 ),
             },
         ),
@@ -116,19 +220,16 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
         name="camera",
         frame=ObjRef(type="body", name="torso_link", entity="robot"),
         pattern=patterns.PinholeCameraPatternCfg(
-            width=int(480 / 10),
             height=int(270 / 10),
+            width=int(480 / 10),
             fovy=58.0,
         ),
-        mesh_prim_paths=["/World/ground/", "/World/envs/env_.*/Robot/.*"],
-        aux_mesh_and_link_names={
-            "torso_link_rev_1_0": None,
-            "waist_yaw_link_rev_1_0": "waist_yaw_link",
-            "waist_roll_link_rev_1_0": "waist_roll_link",
-            "head_link": "head_link",
-            "left_rubber_hand": "left_rubber_hand",
-            "right_rubber_hand": "right_rubber_hand",
-        },
+        focal_length=1.0,
+        horizontal_aperture=2 * math.tan(math.radians(87) / 2),  # fovx
+        vertical_aperture=2 * math.tan(math.radians(58) / 2),  # fovy
+        ray_alignment="base",
+        include_geom_groups=(0, 2),
+        exclude_parent_body=False,
         offset=NoisyGroupedRayCasterCameraCfg.OffsetCfg(
             pos=(
                 0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48)),
@@ -142,12 +243,6 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
                 0.0,
             ),
             convention="world",
-        ),
-        attach_yaw_only=False,
-        pattern_cfg=patterns.PinholeCameraPatternCfg(
-            width=int(480 / 10),
-            height=int(270 / 10),
-            fovy=58.0,  # fovy
         ),
         data_types=["distance_to_image_plane"],
         noise_pipeline={
@@ -182,6 +277,7 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
         debug_vis=False,
         depth_clipping_behavior="max",  # clip to the maximum value
         min_distance=0.05,
+        max_distance=1e6,
     ))
 
     contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
@@ -194,27 +290,10 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
         track_air_time=True,
     ))
 
-    undesired_contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
-        name="undesired_contact_forces",
-        primary=ContactMatch(
-            mode="body",
-            pattern=".*",
-            entity="robot",
-            exclude=(
-                "left_ankle_roll_link",
-                "right_ankle_roll_link",
-                "left_wrist_yaw_link",
-                "right_wrist_yaw_link",
-            ),
-        ),
-        secondary=ContactMatch(mode="body", pattern="terrain"),
-        fields=("found", "force"),
-        reduce="netforce",
-        num_slots=1,
-    ))
-
 
     def __post_init__(self):
+        if self.spec_fn is None:
+            self.spec_fn = _edit_perceptive_scene_spec
         # Bridge Isaac Lab-style class attributes into mjlab entities dict / sensors tuple
         if self.robot is not None:
             self.entities["robot"] = self.robot
@@ -223,8 +302,6 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
         sensor_list = []
         if self.contact_forces is not None:
             sensor_list.append(self.contact_forces)
-        if self.undesired_contact_forces is not None:
-            sensor_list.append(self.undesired_contact_forces)
         if self.height_scanner is not None:
             sensor_list.append(self.height_scanner)
         if self.camera is not None:
@@ -259,8 +336,22 @@ def make_perceptive_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg
             in_base_frame=True,
             rotation_mode="tannorm",
         ),
-        "joint_pos_ref_command": instinct_mdp.JointPosRefCommandCfg(current_state_command=False),
-        "joint_vel_ref_command": instinct_mdp.JointVelRefCommandCfg(current_state_command=False),
+        "joint_pos_ref_command": instinct_mdp.JointPosRefCommandCfg(
+            current_state_command=False,
+            asset_cfg=SceneEntityCfg(
+                "robot",
+                joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                preserve_order=True,
+            ),
+        ),
+        "joint_vel_ref_command": instinct_mdp.JointVelRefCommandCfg(
+            current_state_command=False,
+            asset_cfg=SceneEntityCfg(
+                "robot",
+                joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                preserve_order=True,
+            ),
+        ),
     }
 
 
@@ -270,7 +361,8 @@ def make_actions() -> dict[str, mdp.JointPositionActionCfg]:
     return {
         "joint_pos": mdp.JointPositionActionCfg(
             entity_name="robot",
-            actuator_names=(".*",),
+            actuator_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+            preserve_order=True,
             scale=0.5,
         ),
     }
@@ -321,11 +413,25 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         ),
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                    preserve_order=True,
+                ),
+            },
             noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                    preserve_order=True,
+                ),
+            },
             noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
@@ -368,10 +474,24 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         ),
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                    preserve_order=True,
+                ),
+            },
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
+                    preserve_order=True,
+                ),
+            },
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "last_action": ObsTermCfg(
@@ -467,7 +587,8 @@ def make_rewards() -> dict[str, RewTermCfg]:
             func=instinct_mdp.undesired_contacts,
             weight=-0.1,
             params={
-                "sensor_name": "undesired_contact_forces",
+                "sensor_name": "contact_forces",
+                "asset_cfg": SceneEntityCfg("robot", body_names=[_UNDESIRED_CONTACT_BODY_REGEX]),
                 "threshold": 1.0,
             },
         ),
@@ -661,7 +782,8 @@ def make_terminations() -> dict[str, DoneTermCfg]:
             func=instinct_mdp.illegal_reset_contact,
             time_out=True,
             params={
-                "sensor_name": "undesired_contact_forces",
+                "sensor_name": "contact_forces",
+                "asset_cfg": SceneEntityCfg("robot", body_names=[_UNDESIRED_CONTACT_BODY_REGEX]),
                 "threshold": 500,
                 "episode_length_threshold": 2,
             },
@@ -824,8 +946,9 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         self.episode_length_s = 10.0
         # simulation settings
         self.sim.mujoco.timestep = 1.0 / 50.0 / self.decimation
-        # Contact budget for perceptive shadowing scene (avoid broadphase overflow warnings in play).
-        self.sim.nconmax = 100
-        self.sim.njmax = 300
+        # Contact budget for perceptive shadowing scene (hfield collision can create
+        # denser initial contacts than mesh-hull collision).
+        self.sim.nconmax = 256
+        self.sim.njmax = 768
 
         # All managers are already dicts, no conversion needed!
