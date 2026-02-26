@@ -5,3 +5,4 @@ from mjlab.envs import VecEnvStepReturn as VecEnvStepReturn
 
 from .manager_based_rl_env import InstinctRlEnv
 from .manager_based_rl_env_cfg import InstinctLabRLEnvCfg
+from .viewer_cfg import InstinctLabViewerConfig

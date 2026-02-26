@@ -201,10 +201,10 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
     treats the *interior* of any closed mesh as solid, so a robot standing
     inside a scanned room receives spurious contacts.
 
-    CoACD decomposes the mesh into a set of approximate convex hulls.  Each
-    hull is added as a separate ``mjGEOM_MESH`` collision geom (invisible,
-    group 3) while the original mesh is kept for rendering and depth-camera
-    ray-casting (group 2).
+    CoACD decomposes the mesh into a set of approximate convex hulls.  By
+    default, each hull is added as a separate ``mjGEOM_MESH`` collision geom
+    (invisible, group 3) while the original mesh is kept for rendering and
+    depth-camera ray-casting (group 2).
 
     Mutually exclusive with ``collision_hfield`` and ``face_box_collision``.
     """
@@ -305,6 +305,40 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
 
     collision_coacd_auto_align_resolution: float = 0.04
     """XY sampling resolution (meters) for CoACD top-surface auto alignment."""
+
+    collision_coacd_visualize_collision_hulls: bool = False
+    """If True, render CoACD collision hulls instead of the source visual mesh.
+
+    Useful for debugging collision-vs-visual alignment and for setups where
+    sensors should observe the same geometry used by physics contacts.
+    """
+
+    collision_coacd_collision_geom_group: int = 3
+    """Geom group assigned to CoACD collision hulls.
+
+    Default 3 keeps hulls hidden from cameras/raycasters that use groups (0, 1, 2).
+    Set to 2 if camera/raycast should hit visible collision hulls.
+    """
+
+    collision_coacd_collision_geom_rgba: tuple[float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    """RGBA color assigned to CoACD hull geoms.
+
+    Keep transparent by default. If visualizing hulls, set alpha > 0.
+    """
+
+    collision_coacd_source_visual_geom_group: int = 2
+    """Geom group assigned to the source visual mesh in CoACD mode."""
+
+    collision_coacd_hide_source_visual_mesh: bool = False
+    """If True, hide the source visual mesh when CoACD is enabled.
+
+    This is useful when rendering only collision hulls to inspect alignment.
+    """
 
     def function(
         self,

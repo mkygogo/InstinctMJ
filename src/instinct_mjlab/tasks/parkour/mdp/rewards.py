@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 from mjlab.managers import SceneEntityCfg
 from mjlab.sensor import ContactSensor, RayCastSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
-from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1_consts
+
+from instinct_mjlab.assets.unitree_g1 import G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT
 
 if TYPE_CHECKING:
   from mjlab.entity import Entity
@@ -14,20 +15,15 @@ if TYPE_CHECKING:
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
-_G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT = {
-  float(g1_consts.ACTUATOR_7520_14.effort_limit): float(g1_consts.ACTUATOR_7520_14.velocity_limit),
-  float(g1_consts.ACTUATOR_7520_22.effort_limit): float(g1_consts.ACTUATOR_7520_22.velocity_limit),
-  float(g1_consts.ACTUATOR_5020.effort_limit): float(g1_consts.ACTUATOR_5020.velocity_limit),
-  float(g1_consts.ACTUATOR_5020.effort_limit * 2.0): float(g1_consts.ACTUATOR_5020.velocity_limit),
-  float(g1_consts.ACTUATOR_4010.effort_limit): float(g1_consts.ACTUATOR_4010.velocity_limit),
-}
+_G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT = dict(G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT)
 
 
 def _g1_velocity_limit_from_effort_limit(effort_limit: float) -> float:
-  for effort_limit_key, velocity_limit in _G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT.items():
-    if abs(effort_limit - effort_limit_key) < 1e-6:
-      return velocity_limit
-  raise RuntimeError(f"Unsupported G1 actuator effort_limit={effort_limit} for joint_vel_limits.")
+  return next(
+    velocity_limit
+    for effort_limit_key, velocity_limit in _G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT.items()
+    if abs(effort_limit - effort_limit_key) < 1e-6
+  )
 
 
 def track_lin_vel_xy_exp(
@@ -272,8 +268,6 @@ def feet_at_plane(
     body_ids = list(range(body_pos_w.shape[1]))[body_ids]
   else:
     body_ids = list(body_ids)
-  if len(body_ids) < 2:
-    raise ValueError("feet_at_plane expects at least two body ids in asset_cfg.")
 
   contact_sensor: ContactSensor = env.scene[contact_sensor_name]
   force_history = contact_sensor.data.force_history
@@ -314,8 +308,6 @@ def feet_close_xy_gauss(
   """Penalize when feet are too close together in the y distance."""
   asset: Entity = env.scene[asset_cfg.name]
   body_pos_w = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :]
-  if body_pos_w.shape[1] < 2:
-    raise ValueError("feet_close_xy_gauss expects at least two body ids in asset_cfg.")
 
   left_foot_xy = body_pos_w[:, 0, :2]
   right_foot_xy = body_pos_w[:, 1, :2]
@@ -404,14 +396,6 @@ def joint_vel_limits(
     joint_vel_limits[:, target_ids] = velocity_limit
     is_joint_covered[target_ids] = True
 
-  missing_joint_ids = [j for j in selected_joint_ids if not bool(is_joint_covered[j])]
-  if len(missing_joint_ids) > 0:
-    missing_joint_names = [asset.joint_names[j] for j in missing_joint_ids]
-    raise RuntimeError(
-      "joint_vel_limits missing velocity limits for joints: "
-      + ", ".join(missing_joint_names)
-    )
-
   out_of_limits = (
     torch.abs(asset.data.joint_vel[:, asset_cfg.joint_ids])
     - joint_vel_limits[:, asset_cfg.joint_ids] * soft_ratio
@@ -455,8 +439,6 @@ def applied_torque_limits_by_ratio(
       torque_abs = torch.abs(actuator_force[:, ctrl_id_local])
       out_of_limits.append(torch.clamp(torque_abs - effort_limit * limit_ratio, min=0.0))
 
-  if len(out_of_limits) == 0:
-    raise RuntimeError("No actuator channels matched selected joints for torque limit reward.")
   out_of_limits_tensor = torch.stack(out_of_limits, dim=-1)
   return torch.sum(torch.square(out_of_limits_tensor), dim=-1)
 

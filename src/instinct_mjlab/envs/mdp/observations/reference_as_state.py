@@ -10,11 +10,6 @@ from mjlab.utils.lab_api import math as math_utils
 
 import instinct_mjlab.utils.math as instinct_math
 
-if not hasattr(math_utils, "quat_rotate_inverse") and hasattr(math_utils, "quat_apply_inverse"):
-    math_utils.quat_apply_inverse = math_utils.quat_apply_inverse
-if not hasattr(math_utils, "quat_rotate") and hasattr(math_utils, "quat_apply"):
-    math_utils.quat_rotate = math_utils.quat_apply
-
 if TYPE_CHECKING:
     from mjlab.entity import Entity as Articulation
     from mjlab.envs import ManagerBasedRlEnv as ManagerBasedEnv

@@ -13,8 +13,8 @@ from mjlab.actuator import (
   BuiltinPositionActuatorCfg,
   DelayedActuatorCfg,
 )
-from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as _g1
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.utils.os import update_assets
 
 __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 
@@ -23,6 +23,7 @@ __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 G1_MJCF_PATH: str = os.path.join(
   __file_dir__, "resources/unitree_g1/xml/g1_29dof_torsobase_popsicle.xml"
 )
+G1_MESHES_DIR: str = os.path.join(__file_dir__, "resources/unitree_g1/meshes")
 
 LimitCfg: TypeAlias = float | dict[str, float]
 
@@ -100,6 +101,13 @@ def _get_popsicle_spec() -> mujoco.MjSpec:
   The free joint is attached to `torso_link`, so root pose/init_state is applied on torso_link.
   """
   return mujoco.MjSpec.from_file(G1_MJCF_PATH)
+
+
+def get_g1_assets(meshdir: str | None) -> dict[str, bytes]:
+  """Load local G1 mesh assets keyed with MuJoCo meshdir prefix."""
+  assets: dict[str, bytes] = {}
+  update_assets(assets, G1_MESHES_DIR, meshdir)
+  return assets
 
 
 # Initial state matching InstinctLab G1_29DOF_TORSOBASE_CFG (simplified variant).
@@ -203,23 +211,55 @@ def _resolve_limit_value(limit_cfg: LimitCfg, key: str) -> float:
   return float(limit_cfg)
 
 
-ARMATURE_5020 = _g1.ARMATURE_5020
-ARMATURE_7520_14 = _g1.ARMATURE_7520_14
-ARMATURE_7520_22 = _g1.ARMATURE_7520_22
-ARMATURE_4010 = _g1.ARMATURE_4010
+# Motor specs (from Unitree), aligned with mjlab's original g1_constants.
+ROTOR_INERTIAS_5020 = (0.139e-4, 0.017e-4, 0.169e-4)
+GEARS_5020 = (1, 1 + (46 / 18), 1 + (56 / 16))
+ROTOR_INERTIAS_7520_14 = (0.489e-4, 0.098e-4, 0.533e-4)
+GEARS_7520_14 = (1, 4.5, 1 + (48 / 22))
+ROTOR_INERTIAS_7520_22 = (0.489e-4, 0.109e-4, 0.738e-4)
+GEARS_7520_22 = (1, 4.5, 5)
+ROTOR_INERTIAS_4010 = (0.068e-4, 0.0, 0.0)
+GEARS_4010 = (1, 5, 5)
 
-NATURAL_FREQ = _g1.NATURAL_FREQ
-DAMPING_RATIO = _g1.DAMPING_RATIO
+# Motor output limits (aligned with mjlab's original g1_constants).
+ACTUATOR_5020_EFFORT_LIMIT = 25.0
+ACTUATOR_5020_VELOCITY_LIMIT = 37.0
+ACTUATOR_7520_14_EFFORT_LIMIT = 88.0
+ACTUATOR_7520_14_VELOCITY_LIMIT = 32.0
+ACTUATOR_7520_22_EFFORT_LIMIT = 139.0
+ACTUATOR_7520_22_VELOCITY_LIMIT = 20.0
+ACTUATOR_4010_EFFORT_LIMIT = 5.0
+ACTUATOR_4010_VELOCITY_LIMIT = 22.0
+ACTUATOR_DUAL_5020_EFFORT_LIMIT = ACTUATOR_5020_EFFORT_LIMIT * 2.0
 
-STIFFNESS_5020 = _g1.STIFFNESS_5020
-STIFFNESS_7520_14 = _g1.STIFFNESS_7520_14
-STIFFNESS_7520_22 = _g1.STIFFNESS_7520_22
-STIFFNESS_4010 = _g1.STIFFNESS_4010
+# Following the principles of BeyondMimic, and the kp/kd computation logic.
+# NOTE: These logic are still being tested, so we put them here for substitution in users Cfg class.
+ARMATURE_5020 = 0.003609725
+ARMATURE_7520_14 = 0.010177520
+ARMATURE_7520_22 = 0.025101925
+ARMATURE_4010 = 0.00425
 
-DAMPING_5020 = _g1.DAMPING_5020
-DAMPING_7520_14 = _g1.DAMPING_7520_14
-DAMPING_7520_22 = _g1.DAMPING_7520_22
-DAMPING_4010 = _g1.DAMPING_4010
+NATURAL_FREQ = 10 * 2.0 * 3.1415926535  # 10Hz
+DAMPING_RATIO = 2.0
+
+STIFFNESS_5020 = ARMATURE_5020 * NATURAL_FREQ**2
+STIFFNESS_7520_14 = ARMATURE_7520_14 * NATURAL_FREQ**2
+STIFFNESS_7520_22 = ARMATURE_7520_22 * NATURAL_FREQ**2
+STIFFNESS_4010 = ARMATURE_4010 * NATURAL_FREQ**2
+
+DAMPING_5020 = 2.0 * DAMPING_RATIO * ARMATURE_5020 * NATURAL_FREQ
+DAMPING_7520_14 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ
+DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
+DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
+
+# Used by parkour joint-velocity-limit reward reconstruction.
+G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT: dict[float, float] = {
+  ACTUATOR_7520_14_EFFORT_LIMIT: ACTUATOR_7520_14_VELOCITY_LIMIT,
+  ACTUATOR_7520_22_EFFORT_LIMIT: ACTUATOR_7520_22_VELOCITY_LIMIT,
+  ACTUATOR_5020_EFFORT_LIMIT: ACTUATOR_5020_VELOCITY_LIMIT,
+  ACTUATOR_DUAL_5020_EFFORT_LIMIT: ACTUATOR_5020_VELOCITY_LIMIT,
+  ACTUATOR_4010_EFFORT_LIMIT: ACTUATOR_4010_VELOCITY_LIMIT,
+}
 
 
 g1_29dof_torsobase_delayed_actuator_cfgs: tuple[ActuatorCfg, ...] = (
@@ -606,6 +646,15 @@ for actuator_cfg in beyondmimic_g1_29dof_actuators.values():
 
 
 __all__ = [
+  "ACTUATOR_4010_EFFORT_LIMIT",
+  "ACTUATOR_4010_VELOCITY_LIMIT",
+  "ACTUATOR_5020_EFFORT_LIMIT",
+  "ACTUATOR_5020_VELOCITY_LIMIT",
+  "ACTUATOR_7520_14_EFFORT_LIMIT",
+  "ACTUATOR_7520_14_VELOCITY_LIMIT",
+  "ACTUATOR_7520_22_EFFORT_LIMIT",
+  "ACTUATOR_7520_22_VELOCITY_LIMIT",
+  "ACTUATOR_DUAL_5020_EFFORT_LIMIT",
   "ARMATURE_4010",
   "ARMATURE_5020",
   "ARMATURE_7520_14",
@@ -615,14 +664,24 @@ __all__ = [
   "DAMPING_7520_14",
   "DAMPING_7520_22",
   "DAMPING_RATIO",
+  "GEARS_4010",
+  "GEARS_5020",
+  "GEARS_7520_14",
+  "GEARS_7520_22",
+  "G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT",
   "G1_29DOF_TORSOBASE_CFG",
   "G1_29DOF_TORSOBASE_CLOG_CFG",
   "G1_29DOF_INSTINCTLAB_JOINT_ORDER",
   "G1_29DOF_TORSOBASE_POPSICLE_CFG",
+  "G1_MESHES_DIR",
   "G1_MJCF_PATH",
   "G1_29Dof_TorsoBase_symmetric_augmentation_joint_mapping",
   "G1_29Dof_TorsoBase_symmetric_augmentation_joint_reverse_buf",
   "NATURAL_FREQ",
+  "ROTOR_INERTIAS_4010",
+  "ROTOR_INERTIAS_5020",
+  "ROTOR_INERTIAS_7520_14",
+  "ROTOR_INERTIAS_7520_22",
   "STIFFNESS_4010",
   "STIFFNESS_5020",
   "STIFFNESS_7520_14",
@@ -632,5 +691,6 @@ __all__ = [
   "beyondmimic_g1_29dof_actuators",
   "beyondmimic_g1_29dof_delayed_actuator_cfgs",
   "beyondmimic_g1_29dof_delayed_actuators",
+  "get_g1_assets",
   "g1_29dof_torsobase_delayed_actuator_cfgs",
 ]

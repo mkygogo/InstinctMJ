@@ -7,9 +7,8 @@ from functools import partial
 
 import mjlab.envs.mdp as mdp
 import mjlab.sim as sim_utils
-from mjlab.assets import RigidObjectCfg
 from mjlab.managers import EventTermCfg, SceneEntityCfg
-from mjlab.viewer import ViewerConfig
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig as ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
 import instinct_mjlab.tasks.shadowing.mdp as shadowing_mdp
@@ -91,6 +90,7 @@ class AMASSMotionCfg(AmassMotionCfgBase):
 
 
 motion_reference_cfg = MotionReferenceManagerCfg(
+    name="motion_reference",
     entity_name="robot",
     robot_model_path=G1_MJCF_PATH,
     link_of_interests=[
@@ -134,66 +134,73 @@ def _make_motion_reference_cfg(*, debug_vis: bool = False) -> MotionReferenceMan
     return cfg
 
 
-def _apply_stl_heightfield_terrain_source(
+def _apply_motion_matched_terrain_source(
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg,
     *,
     default_path: str,
     default_metadata_yaml: str,
 ) -> None:
-    """Bind perceptive terrain generator to STL-heightfield source."""
+    """Bind perceptive terrain generator to motion-matched source."""
     terrain_generator = scene.terrain.terrain_generator
-    terrain_cfg = perceptual_cfg.get_stl_heightfield_subterrain_cfg(
+    terrain_cfg = perceptual_cfg.get_motion_matched_subterrain_cfg(
         terrain_generator.sub_terrains
     )
-    terrain_path, terrain_metadata_yaml = perceptual_cfg.resolve_perceptive_stl_heightfield_source(
-        default_path=default_path,
-        default_metadata_yaml=default_metadata_yaml,
-    )
-    terrain_cfg.path = terrain_path
-    terrain_cfg.metadata_yaml = terrain_metadata_yaml
-    terrain_cfg.hfield_floor_z_offset = perceptual_cfg.resolve_perceptive_hfield_floor_z_offset(
-        default_offset=float(terrain_cfg.hfield_floor_z_offset)
-    )
+    terrain_cfg.path = default_path
+    terrain_cfg.metadata_yaml = default_metadata_yaml
 
 
 @dataclass(kw_only=True)
 class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg = field(default_factory=lambda: perceptual_cfg.PerceptiveShadowingSceneCfg(
-        num_envs=4096,
-        robot=deepcopy(G1_CFG),
-        motion_reference=_make_motion_reference_cfg(debug_vis=False),
+        num_envs=1024 * 3,
+        entities=perceptual_cfg.make_perceptive_scene_entities(
+            robot=deepcopy(G1_CFG),
+        ),
+        sensors=perceptual_cfg.make_perceptive_scene_sensors(
+            motion_reference=_make_motion_reference_cfg(debug_vis=False),
+        ),
     ))
 
     def __post_init__(self):
         super().__post_init__()
 
-        self.scene.robot.articulation.actuators = beyondmimic_g1_29dof_actuator_cfgs
+        robot_cfg = perceptual_cfg.get_scene_entity_cfg(self.scene, "robot")
+        motion_reference_cfg = perceptual_cfg.get_motion_reference_cfg(self.scene)
+
+        robot_cfg.articulation.actuators = beyondmimic_g1_29dof_actuator_cfgs
         # self.scene.robot.spawn.rigid_props.max_depenetration_velocity = 0.3
         self.actions["joint_pos"].scale = beyondmimic_action_scale
+        # Set contact/constraint capacities explicitly for perceptive shadowing.
+        self.sim.njmax = 700
+        self.sim.nconmax = 128
+        # Raise CCD iterations for perceptive terrain contacts (default 50 can trigger EPA horizon warnings).
+        self.sim.mujoco.ccd_iterations = 200
+        # Mirror parkour CCD mode for dense terrain contact pairs.
+        self.sim.mujoco.multiccd = True
 
-        MOTION_NAME = list(self.scene.motion_reference.motion_buffers.keys())[0]
-        motion_buffer = self.scene.motion_reference.motion_buffers[MOTION_NAME]
+        MOTION_NAME = list(motion_reference_cfg.motion_buffers.keys())[0]
+        motion_buffer = motion_reference_cfg.motion_buffers[MOTION_NAME]
         motion_buffer.metadata_yaml = os.path.join(
             motion_buffer.path, "metadata.yaml"
         )
         force_plane_terrain = _env_flag("INSTINCT_PERCEPTIVE_FORCE_PLANE", default=False)
         if force_plane_terrain:
-            self.scene.motion_reference.motion_buffers.pop(MOTION_NAME)
-            self.scene.motion_reference.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
+            motion_reference_cfg.motion_buffers.pop(MOTION_NAME)
+            motion_reference_cfg.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
             self.scene.terrain.terrain_type = "plane"
             self.scene.terrain.terrain_generator = None
         else:
-            _apply_stl_heightfield_terrain_source(
+            _apply_motion_matched_terrain_source(
                 self.scene,
                 default_path=motion_buffer.path,
                 default_metadata_yaml=motion_buffer.metadata_yaml,
             )
-        active_motion_name = list(self.scene.motion_reference.motion_buffers.keys())[0]
-        active_motion_buffer = self.scene.motion_reference.motion_buffers[active_motion_name]
+        active_motion_name = list(motion_reference_cfg.motion_buffers.keys())[0]
+        active_motion_buffer = motion_reference_cfg.motion_buffers[active_motion_name]
 
         # match key links for observation terms
-        self.observations["critic"].terms["link_pos"].params["asset_cfg"].body_names = self.scene.motion_reference.link_of_interests
-        self.observations["critic"].terms["link_rot"].params["asset_cfg"].body_names = self.scene.motion_reference.link_of_interests
+        self.observations["critic"].terms["link_pos"].params["asset_cfg"].body_names = motion_reference_cfg.link_of_interests
+        self.observations["critic"].terms["link_rot"].params["asset_cfg"].body_names = motion_reference_cfg.link_of_interests
 
         self.run_name = "g1Perceptive" + "".join(
             [
@@ -211,9 +218,13 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg = field(default_factory=lambda: perceptual_cfg.PerceptiveShadowingSceneCfg(
         num_envs=1,
         env_spacing=2.5,
-        robot=deepcopy(G1_CFG),
-        robot_reference=deepcopy(G1_CFG),
-        motion_reference=_make_motion_reference_cfg(debug_vis=True),
+        entities=perceptual_cfg.make_perceptive_scene_entities(
+            robot=deepcopy(G1_CFG),
+            robot_reference=deepcopy(G1_CFG),
+        ),
+        sensors=perceptual_cfg.make_perceptive_scene_sensors(
+            motion_reference=_make_motion_reference_cfg(debug_vis=True),
+        ),
     ))
 
     viewer: ViewerConfig = field(default_factory=lambda: ViewerConfig(
@@ -221,25 +232,24 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
         distance=2.1213,
         elevation=45.0,
         azimuth=0.0,
-        origin_type=ViewerConfig.OriginType.ASSET_ROOT,
+        origin_type=ViewerConfig.OriginType.ASSET_BODY,
         entity_name="robot",
+        body_name="torso_link",
     ))
 
     def __post_init__(self):
         super().__post_init__()
 
+        motion_reference_cfg = perceptual_cfg.get_motion_reference_cfg(self.scene)
+        camera_cfg = perceptual_cfg.get_camera_sensor_cfg(self.scene)
+
         # deactivate adaptive sampling and start from the 0.0s of the motion
         self.curriculum["beyond_adaptive_sampling"] = None
         self.events["bin_fail_counter_smoothing"] = None
-        MOTION_NAME = list(self.scene.motion_reference.motion_buffers.keys())[0]
+        MOTION_NAME = list(motion_reference_cfg.motion_buffers.keys())[0]
         play_stub_sampling_strategy = os.environ.get(
             "INSTINCT_PERCEPTIVE_PLAY_STUB_SAMPLING_STRATEGY", "independent"
         ).strip()
-        if play_stub_sampling_strategy not in {"independent", "concat_motion_bins"}:
-            raise ValueError(
-                "INSTINCT_PERCEPTIVE_PLAY_STUB_SAMPLING_STRATEGY must be one of "
-                "['independent', 'concat_motion_bins']."
-            )
         motion_bin_length_override = os.environ.get("INSTINCT_PERCEPTIVE_PLAY_MOTION_BIN_LENGTH_S")
         if motion_bin_length_override is None:
             play_motion_bin_length_s = 1.0 if play_stub_sampling_strategy == "concat_motion_bins" else None
@@ -249,16 +259,16 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
             play_motion_bin_length_s = float(motion_bin_length_override)
         play_motion_path = os.environ.get("INSTINCT_PERCEPTIVE_PLAY_MOTION_PATH")
         if play_motion_path:
-            self.scene.motion_reference.motion_buffers[MOTION_NAME].path = os.path.expanduser(play_motion_path)
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_start_from_middle_range = [0.0, 0.0]
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_bin_length_s = play_motion_bin_length_s
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = (
+            motion_reference_cfg.motion_buffers[MOTION_NAME].path = os.path.expanduser(play_motion_path)
+        motion_reference_cfg.motion_buffers[MOTION_NAME].motion_start_from_middle_range = [0.0, 0.0]
+        motion_reference_cfg.motion_buffers[MOTION_NAME].motion_bin_length_s = play_motion_bin_length_s
+        motion_reference_cfg.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = (
             play_stub_sampling_strategy
         )
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].path = (
         #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
         # )
-        motion_buffer = self.scene.motion_reference.motion_buffers[MOTION_NAME]
+        motion_buffer = motion_reference_cfg.motion_buffers[MOTION_NAME]
         motion_buffer.metadata_yaml = os.path.join(
             motion_buffer.path, "metadata.yaml"
         )
@@ -267,7 +277,7 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
             self.scene.terrain.terrain_type = "plane"
             self.scene.terrain.terrain_generator = None
         if self.scene.terrain.terrain_type == "hacked_generator":
-            _apply_stl_heightfield_terrain_source(
+            _apply_motion_matched_terrain_source(
                 self.scene,
                 default_path=motion_buffer.path,
                 default_metadata_yaml=motion_buffer.metadata_yaml,
@@ -284,8 +294,10 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
         # self.scene.terrain.terrain_type = "plane"
         # self.scene.terrain.terrain_generator = None
 
-        self.scene.camera.debug_vis = True
+        camera_cfg.debug_vis = True
+        self.scene.terrain.collision_debug_vis = False
         self.observations["policy"].terms["depth_image"].params["debug_vis"] = True
+        self.viewer.debug_vis_show_all_envs = True
 
         # change reset robot event with more pitch_down randomization (since the robot is facing -y axis)
         # self.events.reset_robot.params["randomize_pose_range"]["roll"] = (0.0, 0.6)

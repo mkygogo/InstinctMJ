@@ -6,7 +6,7 @@ import os
 import mujoco
 import mjlab.envs.mdp as mdp
 import mjlab.sim as sim_utils
-from mjlab.assets import ArticulationCfg, AssetBaseCfg
+from mjlab.entity import EntityCfg
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
 from mjlab.managers import ObservationGroupCfg as ObsGroupCfg
 from mjlab.managers import ObservationTermCfg as ObsTermCfg
@@ -14,7 +14,7 @@ from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg as InteractiveSceneCfg
-from mjlab.sensors import ContactMatch, ContactSensorCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg, SensorCfg
 from mjlab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.utils.noise import UniformNoiseCfg
@@ -110,16 +110,6 @@ class ShadowingSceneCfg(InteractiveSceneCfg):
 
     env_spacing: float = 4.0
 
-
-    # robots
-    robot: ArticulationCfg = None  # Set by concrete env cfg subclass
-
-    # robot reference articulation
-    robot_reference: ArticulationCfg = None
-
-    # motion reference
-    motion_reference: MotionReferenceManagerCfg = None  # Set by concrete env cfg subclass
-
     # terrain
     terrain: object = field(default_factory=lambda: TerrainImporterCfg(
         prim_path="/World/ground",
@@ -129,19 +119,33 @@ class ShadowingSceneCfg(InteractiveSceneCfg):
         visual_material=None,
     ))
 
+    sensors: tuple[SensorCfg, ...] = field(default_factory=lambda: make_shadowing_scene_sensors())
 
-    # lights
-    light: object = field(default_factory=lambda: AssetBaseCfg(
-        prim_path="/World/light",
-        spawn=None,
-    ))
 
-    sky_light: object = field(default_factory=lambda: AssetBaseCfg(
-        prim_path="/World/skyLight",
-        spawn=None,
-    ))
+    def __post_init__(self):
+        if self.spec_fn is None:
+            self.spec_fn = _edit_shadowing_scene_spec
 
-    contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
+
+def make_shadowing_scene_entities(
+    *,
+    robot: EntityCfg | None = None,
+    robot_reference: EntityCfg | None = None,
+) -> dict[str, EntityCfg]:
+    """Build whole-body shadowing scene entities without bridge fields."""
+    # robots
+    # robot reference articulation
+    # motion reference is configured as a sensor cfg ("motion_reference").
+    entities: dict[str, EntityCfg] = {}
+    if robot is not None:
+        entities["robot"] = robot
+    if robot_reference is not None:
+        entities["robot_reference"] = robot_reference
+    return entities
+
+
+def _make_shadowing_contact_forces_sensor_cfg() -> ContactSensorCfg:
+    return ContactSensorCfg(
         name="contact_forces",
         primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
         secondary=ContactMatch(mode="body", pattern="terrain"),
@@ -149,9 +153,11 @@ class ShadowingSceneCfg(InteractiveSceneCfg):
         reduce="maxforce",
         history_length=3,
         track_air_time=True,
-    ))
+    )
 
-    undesired_contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
+
+def _make_shadowing_undesired_contact_sensor_cfg() -> ContactSensorCfg:
+    return ContactSensorCfg(
         name="undesired_contact_forces",
         primary=ContactMatch(
             mode="body",
@@ -168,31 +174,22 @@ class ShadowingSceneCfg(InteractiveSceneCfg):
         fields=("found", "force"),
         reduce="netforce",
         num_slots=1,
-    ))
+    )
 
 
-    def __post_init__(self):
-        if self.spec_fn is None:
-            self.spec_fn = _edit_shadowing_scene_spec
-        # Bridge Isaac Lab-style class attributes into mjlab entities dict / sensors tuple
-        if self.robot is not None:
-            self.entities["robot"] = self.robot
-        if self.robot_reference is not None:
-            self.entities["robot_reference"] = self.robot_reference
-        sensor_list = []
-        if self.contact_forces is not None:
-            sensor_list.append(self.contact_forces)
-        if self.undesired_contact_forces is not None:
-            sensor_list.append(self.undesired_contact_forces)
-        if self.motion_reference is not None:
-            sensor_list.append(self.motion_reference)
-        self.sensors = tuple(sensor_list)
-
-        if self.motion_reference is None or self.motion_reference.reference_entity_name is None:
-            if "robot_reference" in self.entities:
-                del self.entities["robot_reference"]
-            if hasattr(self, "robot_reference"):
-                delattr(self, "robot_reference")
+def make_shadowing_scene_sensors(
+    *,
+    motion_reference: MotionReferenceManagerCfg | None = None,
+) -> tuple[SensorCfg, ...]:
+    """Build whole-body shadowing scene sensors without bridge fields."""
+    # lights are applied in _edit_shadowing_scene_spec.
+    sensor_list: list[SensorCfg] = [
+        _make_shadowing_contact_forces_sensor_cfg(),
+        _make_shadowing_undesired_contact_sensor_cfg(),
+    ]
+    if motion_reference is not None:
+        sensor_list.append(motion_reference)
+    return tuple(sensor_list)
 
 
 def make_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg]:

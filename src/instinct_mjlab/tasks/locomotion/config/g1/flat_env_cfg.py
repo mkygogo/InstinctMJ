@@ -21,7 +21,7 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.terrains import TerrainImporterCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
-from mjlab.viewer import ViewerConfig
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig as ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
 import instinct_mjlab.tasks.locomotion.mdp as locomotion_mdp
@@ -38,8 +38,8 @@ _BASE_CONTACT_SENSOR_NAME = "base_contact_forces"
 
 def _make_robot_cfg():
   robot_cfg = copy.deepcopy(G1_CFG)
-  if robot_cfg.articulation is not None:
-    robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_actuator_cfgs)
+  assert robot_cfg.articulation is not None, "Robot articulation must be configured for locomotion task."
+  robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_actuator_cfgs)
   return robot_cfg
 
 

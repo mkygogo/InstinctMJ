@@ -7,7 +7,7 @@ from mjlab.utils.lab_api import math as math_utils
 from mjlab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
-    from mjlab.assets import Articulation, RigidObject
+    from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedEnv
 
     from instinct_mjlab.motion_reference import MotionReferenceData, MotionReferenceManager
@@ -232,7 +232,7 @@ def reset_robot_state_by_reference_gaussian_randomization_scale(
     gaussian_std: float = 0.2,
     reverse_gaussian: bool = True,  # higher scale at start/end, lower scale at middle
 ):
-    asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_ref: MotionReferenceManager = env.scene[motion_ref_cfg.name]
 
     # no reset the motion reference object

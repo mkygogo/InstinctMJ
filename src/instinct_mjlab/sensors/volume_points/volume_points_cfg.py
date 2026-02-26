@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
 from mjlab.sensor import SensorCfg
 
 from .points_generator_cfg import PointsGeneratorCfg

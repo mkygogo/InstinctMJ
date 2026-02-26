@@ -63,11 +63,7 @@ class InstinctRlEnv(ManagerBasedRlEnv):
 
   def setup_manager_visualizers(self) -> None:
     super().setup_manager_visualizers()
-    if (
-      getattr(self, "monitor_manager", None) is not None
-      and hasattr(self.monitor_manager, "debug_vis")
-    ):
-      self.manager_visualizers["monitor_manager"] = self.monitor_manager
+    self.manager_visualizers["monitor_manager"] = self.monitor_manager
 
   def step(self, action: torch.Tensor):
     obs, reward, terminated, truncated, extras = super().step(action)
@@ -78,9 +74,14 @@ class InstinctRlEnv(ManagerBasedRlEnv):
     return obs, reward, terminated, truncated, extras
 
   def update_visualizers(self, visualizer: DebugVisualizer) -> None:
+    # Play configs can opt into visualizing debug overlays for all environments
+    # (instead of only the currently selected env index in the viewer).
+    viewer_cfg = getattr(self.cfg, "viewer", None)
+    if bool(getattr(viewer_cfg, "debug_vis_show_all_envs", False)):
+      visualizer.show_all_envs = True
     super().update_visualizers(visualizer)
     terrain = getattr(self.scene, "terrain", None)
-    if terrain is not None and hasattr(terrain, "debug_vis"):
+    if terrain is not None:
       terrain.debug_vis(visualizer)
 
   def _reset_idx(self, env_ids: Sequence[int] | torch.Tensor | None = None) -> None:
@@ -89,10 +90,13 @@ class InstinctRlEnv(ManagerBasedRlEnv):
     if isinstance(env_ids, Sequence):
       env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.int64)
 
-    super()._reset_idx(env_ids)
-
+    monitor_infos = None
     if getattr(self, "monitor_manager", None) is not None:
       monitor_infos = self.monitor_manager.reset(env_ids, is_episode=True)
+
+    super()._reset_idx(env_ids)
+
+    if monitor_infos is not None:
       self.extras["log"] = self.extras.get("log", {})
       self.extras["log"].update(monitor_infos)
 

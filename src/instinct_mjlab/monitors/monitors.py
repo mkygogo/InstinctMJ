@@ -22,7 +22,7 @@ from instinct_mjlab.motion_reference.utils import (
 from .monitor_manager import MonitorSensor, MonitorTerm
 
 if TYPE_CHECKING:
-    from mjlab.assets import Articulation
+    from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedRLEnv
 
     from instinct_mjlab.motion_reference import MotionReferenceManager
@@ -201,7 +201,7 @@ class ActuatorMonitorTerm(MonitorTerm):
         super().__init__(cfg, env)
         if not (self._env.num_envs == 1):
             print("\033[93mWarning: ActuatorMonitorTerm is designed to work with a single environment. \033[0m")
-        self.asset: Articulation = self._env.scene[self.cfg.params["asset_cfg"].name]
+        self.asset: Entity = self._env.scene[self.cfg.params["asset_cfg"].name]
         self.asset_joint_ids = self.cfg.params["asset_cfg"].joint_ids
         self.torque_plot_scale = self.cfg.params.get(
             "torque_plot_scale", 1.0
@@ -420,9 +420,12 @@ class ShadowingPositionMonitorTerm(MonitorTerm):
         self._num_frames_should_reach += in_frame_mask.to(torch.int)
 
     def reset_idx(self, env_ids: Sequence[int] | slice):
-        self._episodic_base_pos_error = self._base_pos_error[env_ids] / self._num_frames_should_reach[env_ids]
-        self._episodic_base_pos_error_xy = self._base_pos_error_xy[env_ids] / self._num_frames_should_reach[env_ids]
-        self._episodic_base_pos_error_z = self._base_pos_error_z[env_ids] / self._num_frames_should_reach[env_ids]
+        frame_counts = self._num_frames_should_reach[env_ids]
+        safe_frame_counts = torch.clamp(frame_counts.to(dtype=torch.float32), min=1.0)
+        valid_frame_mask = (frame_counts > 0).to(dtype=torch.float32)
+        self._episodic_base_pos_error = (self._base_pos_error[env_ids] / safe_frame_counts) * valid_frame_mask
+        self._episodic_base_pos_error_xy = (self._base_pos_error_xy[env_ids] / safe_frame_counts) * valid_frame_mask
+        self._episodic_base_pos_error_z = (self._base_pos_error_z[env_ids] / safe_frame_counts) * valid_frame_mask
         self._episodic_base_pos_error_z_max = self._base_pos_error_z_max[env_ids].clone()
 
         self._base_pos_error[env_ids] = 0.0
@@ -440,11 +443,16 @@ class ShadowingPositionMonitorTerm(MonitorTerm):
                 "base_pos_error_z_max": self._episodic_base_pos_error_z_max.max().item(),
             }
         else:
+            safe_frame_counts = torch.clamp(self._num_frames_should_reach.to(dtype=torch.float32), min=1.0)
+            valid_frame_mask = (self._num_frames_should_reach > 0).to(dtype=torch.float32)
+            base_pos_error = (self._base_pos_error / safe_frame_counts) * valid_frame_mask
+            base_pos_error_xy = (self._base_pos_error_xy / safe_frame_counts) * valid_frame_mask
+            base_pos_error_z = (self._base_pos_error_z / safe_frame_counts) * valid_frame_mask
             return {
-                "base_pos_error": (self._base_pos_error / self._num_frames_should_reach).nanmean().item(),
+                "base_pos_error": base_pos_error.nanmean().item(),
                 "base_pos_error_currently": self._base_pos_error_currently.nanmean().item(),
-                "base_pos_error_xy": (self._base_pos_error_xy / self._num_frames_should_reach).nanmean().item(),
-                "base_pos_error_z": (self._base_pos_error_z / self._num_frames_should_reach).nanmean().item(),
+                "base_pos_error_xy": base_pos_error_xy.nanmean().item(),
+                "base_pos_error_z": base_pos_error_z.nanmean().item(),
                 "base_pos_error_z_max": self._base_pos_error_z_max.max().item(),
             }
 
@@ -928,7 +936,7 @@ class ShadowingBasePosMonitorTerm(MonitorTerm):
         self._motion_reference: MotionReferenceManager = self._env.scene[
             self.cfg.params.get("reference_cfg", SceneEntityCfg("motion_reference")).name
         ]
-        self._robot: Articulation = self._env.scene[self.cfg.params.get("robot_cfg", SceneEntityCfg("robot")).name]
+        self._robot: Entity = self._env.scene[self.cfg.params.get("robot_cfg", SceneEntityCfg("robot")).name]
         self._robot_base_pos = torch.zeros(self._env.num_envs, 3, dtype=torch.float32, device=self.device)
         self._reference_base_pos = torch.zeros(self._env.num_envs, 3, dtype=torch.float32, device=self.device)
 

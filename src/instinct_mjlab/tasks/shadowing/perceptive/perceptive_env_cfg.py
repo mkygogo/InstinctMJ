@@ -1,15 +1,10 @@
 from dataclasses import field, dataclass, MISSING
-import hashlib
 import math
-import os
-from pathlib import Path
-import tempfile
-from typing import Any
 
 import mujoco
 import mjlab.envs.mdp as mdp
 import mjlab.sim as sim_utils
-from mjlab.assets import ArticulationCfg, AssetBaseCfg
+from mjlab.entity import EntityCfg
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
 from mjlab.managers import ObservationGroupCfg as ObsGroupCfg
 from mjlab.managers import ObservationTermCfg as ObsTermCfg
@@ -17,7 +12,15 @@ from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg as InteractiveSceneCfg
-from mjlab.sensors import ContactMatch, ContactSensorCfg, ObjRef, RayCasterCfg, patterns
+from mjlab.sensor import (
+    ContactMatch,
+    ContactSensorCfg,
+    GridPatternCfg,
+    ObjRef,
+    PinholeCameraPatternCfg,
+    RayCastSensorCfg,
+    SensorCfg,
+)
 from mjlab.terrains import FlatPatchSamplingCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.utils.noise import UniformNoiseCfg
@@ -40,7 +43,7 @@ from instinct_mjlab.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mjlab.tasks.shadowing import mdp as shadowing_mdp
 from instinct_mjlab.terrains.terrain_generator_cfg import FiledTerrainGeneratorCfg
 from instinct_mjlab.terrains.terrain_importer_cfg import TerrainImporterCfg
-from instinct_mjlab.terrains.trimesh import STLHeightfieldTerrainCfg
+from instinct_mjlab.terrains.trimesh import MotionMatchedTerrainCfg
 from instinct_mjlab.utils.noise import (
     CropAndResizeCfg,
     DepthArtifactNoiseCfg,
@@ -51,7 +54,6 @@ from instinct_mjlab.utils.noise import (
     RangeBasedGaussianNoiseCfg,
     StereoTooCloseNoiseCfg,
 )
-import yaml
 
 # PROPRIO_HISTORY_LENGTH = 0
 PROPRIO_HISTORY_LENGTH = 8
@@ -59,118 +61,10 @@ _UNDESIRED_CONTACT_BODY_REGEX = (
     r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
 )
 
-_PERCEPTIVE_STL_TERRAIN_ENV = "INSTINCT_PERCEPTIVE_TERRAIN_STL"
-_PERCEPTIVE_STL_METADATA_ENV = "INSTINCT_PERCEPTIVE_TERRAIN_METADATA_YAML"
-_PERCEPTIVE_STL_ROOT_ENV = "INSTINCT_PERCEPTIVE_TERRAIN_ROOT"
-_PERCEPTIVE_HFIELD_FLOOR_Z_OFFSET_ENV = "INSTINCT_PERCEPTIVE_HFIELD_FLOOR_Z_OFFSET"
-
-
-def _expanded_abs_path(path: str) -> str:
-    return str(Path(path).expanduser().resolve())
-
-
-def _read_nonempty_env_path(name: str) -> str | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    value = value.strip()
-    if len(value) == 0:
-        return None
-    return _expanded_abs_path(value)
-
-
-def _single_stl_metadata_cache_path(stl_abspath: str) -> str:
-    stl_stem = Path(stl_abspath).stem
-    stl_hash = hashlib.sha1(stl_abspath.encode("utf-8")).hexdigest()[:16]
-    cache_dir = Path(tempfile.gettempdir()) / "instinct_mjlab_perceptive_stl_hfield"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return str(cache_dir / f"{stl_stem}_{stl_hash}.yaml")
-
-
-def _build_single_stl_metadata(stl_abspath: str) -> str:
-    metadata_yaml = _single_stl_metadata_cache_path(stl_abspath)
-    metadata_payload = {
-        "terrains": [
-            {
-                "terrain_id": 0,
-                "terrain_file": Path(stl_abspath).name,
-            },
-        ],
-    }
-    metadata_text = yaml.safe_dump(metadata_payload, sort_keys=False, allow_unicode=False)
-
-    metadata_path = Path(metadata_yaml)
-    if metadata_path.exists():
-        existing_text = metadata_path.read_text(encoding="utf-8")
-        if existing_text == metadata_text:
-            return metadata_yaml
-    metadata_path.write_text(metadata_text, encoding="utf-8")
-    return metadata_yaml
-
-
-def resolve_perceptive_stl_heightfield_source(
-    default_path: str,
-    default_metadata_yaml: str,
-) -> tuple[str, str]:
-    """Resolve STL heightfield source from env overrides.
-
-    Priority:
-    1) INSTINCT_PERCEPTIVE_TERRAIN_STL: single STL path (auto-generates metadata yaml)
-    2) INSTINCT_PERCEPTIVE_TERRAIN_METADATA_YAML (+ optional INSTINCT_PERCEPTIVE_TERRAIN_ROOT)
-    3) default path/metadata from motion dataset
-    """
-    stl_override = _read_nonempty_env_path(_PERCEPTIVE_STL_TERRAIN_ENV)
-    if stl_override is not None:
-        if not os.path.isfile(stl_override):
-            raise FileNotFoundError(
-                f"{_PERCEPTIVE_STL_TERRAIN_ENV} file not found: {stl_override}"
-            )
-        metadata_yaml = _build_single_stl_metadata(stl_override)
-        terrain_path = str(Path(stl_override).parent)
-        return terrain_path, metadata_yaml
-
-    metadata_override = _read_nonempty_env_path(_PERCEPTIVE_STL_METADATA_ENV)
-    if metadata_override is not None:
-        if not os.path.isfile(metadata_override):
-            raise FileNotFoundError(
-                f"{_PERCEPTIVE_STL_METADATA_ENV} file not found: {metadata_override}"
-            )
-        terrain_root_override = _read_nonempty_env_path(_PERCEPTIVE_STL_ROOT_ENV)
-        terrain_path = (
-            terrain_root_override
-            if terrain_root_override is not None
-            else str(Path(metadata_override).parent)
-        )
-        return terrain_path, metadata_override
-
-    return _expanded_abs_path(default_path), _expanded_abs_path(default_metadata_yaml)
-
-
-def resolve_perceptive_hfield_floor_z_offset(default_offset: float = 0.0) -> float:
-    """Read optional floor z offset for STL-heightfield alignment."""
-    raw_value = os.environ.get(_PERCEPTIVE_HFIELD_FLOOR_Z_OFFSET_ENV)
-    if raw_value is None:
-        return float(default_offset)
-    value = raw_value.strip()
-    if len(value) == 0:
-        return float(default_offset)
-    return float(value)
-
-
-def get_stl_heightfield_subterrain_cfg(sub_terrains: dict[str, Any]) -> STLHeightfieldTerrainCfg:
-    """Return the required STL heightfield subterrain config."""
-    terrain_key = "stl_heightfield"
-    if terrain_key not in sub_terrains:
-        available = ", ".join(sorted(sub_terrains.keys()))
-        raise KeyError(
-            f"Perceptive terrain requires '{terrain_key}' sub terrain. Available: [{available}]"
-        )
-    terrain_cfg = sub_terrains[terrain_key]
-    if not isinstance(terrain_cfg, STLHeightfieldTerrainCfg):
-        raise TypeError(
-            f"Expected '{terrain_key}' to be STLHeightfieldTerrainCfg, got {type(terrain_cfg).__name__}"
-        )
-    return terrain_cfg
+def get_motion_matched_subterrain_cfg(sub_terrains: dict[str, object]) -> MotionMatchedTerrainCfg:
+    """Return the required motion-matched subterrain config."""
+    terrain_cfg = sub_terrains["motion_matched"]
+    return terrain_cfg  # type: ignore[return-value]
 
 
 def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
@@ -182,10 +76,10 @@ def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
     # Bright sky theme so native viewer doesn't look like a black void.
     sky_rgb_top = (0.98, 0.99, 1.0)
     sky_rgb_horizon = (0.78, 0.86, 0.95)
-    # White-ish checker ground instead of the default blue checker.
-    ground_rgb1 = (0.95, 0.95, 0.95)
-    ground_rgb2 = (0.88, 0.88, 0.88)
-    ground_mark_rgb = (0.80, 0.80, 0.80)
+    # Gray-white striped checker style (matte and slightly dimmer for terrain).
+    ground_rgb1 = (0.74, 0.76, 0.78)
+    ground_rgb2 = (0.64, 0.66, 0.68)
+    ground_mark_rgb = (0.60, 0.62, 0.64)
 
     # If a skybox already exists in the attached specs, patch it directly.
     # Otherwise, create one.
@@ -225,20 +119,30 @@ def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
     MaterialCfg(
         name=ground_material_name,
         texuniform=True,
-        texrepeat=(4, 4),
-        reflectance=0.05,
+        texrepeat=(5, 5),
+        reflectance=0.0,
         texture=ground_texture_name,
     ).edit_spec(spec)
 
     spec.visual.rgba.haze[:] = (0.90, 0.94, 0.98, 1.0)
-    spec.visual.headlight.ambient[:] = (0.45, 0.45, 0.45)
-    spec.visual.headlight.diffuse[:] = (0.75, 0.75, 0.75)
+    spec.visual.headlight.ambient[:] = (0.28, 0.28, 0.28)
+    spec.visual.headlight.diffuse[:] = (0.36, 0.36, 0.36)
+    spec.visual.headlight.specular[:] = (0.0, 0.0, 0.0)
     # Increase shadow map resolution to eliminate jagged shadow edges (default is 4096).
     spec.visual.quality.shadowsize = 8192
 
     terrain_body = spec.body("terrain")
-    for geom in terrain_body.geoms:
-        geom.material = ground_material_name
+    if terrain_body is not None:
+        for light in terrain_body.lights:
+            # Soft terrain fill light: brighter than pure headlight mode while
+            # avoiding hard specular highlights.
+            light.castshadow = False
+            light.ambient[:] = (0.12, 0.12, 0.12)
+            light.diffuse[:] = (0.24, 0.24, 0.24)
+            light.specular[:] = (0.0, 0.0, 0.0)
+        for geom in terrain_body.geoms:
+            geom.material = ground_material_name
+            geom.rgba[:] = (ground_rgb1[0], ground_rgb1[1], ground_rgb1[2], 1.0)
 
     # Ensure reference robot never participates in contacts.
     # Some G1 XML geoms are unnamed, so name-pattern CollisionCfg cannot reliably
@@ -249,11 +153,24 @@ def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
             continue
         body_name = parent.name or ""
         if body_name.startswith("robot_reference/"):
+            original_contype = int(getattr(geom, "contype", 1))
+            original_conaffinity = int(getattr(geom, "conaffinity", 1))
+            collision_enabled = (original_contype != 0) or (original_conaffinity != 0)
+            geom_name = (geom.name or "").lower()
+            collision_name_hint = ("collision" in geom_name) or ("_col" in geom_name)
+            hide_collision_geom = collision_enabled and (
+                geom.type != mujoco.mjtGeom.mjGEOM_MESH or collision_name_hint
+            )
             geom.contype = 0
             geom.conaffinity = 0
-            # Move reference robot to a non-raycast geom group so depth/height rays
-            # do not observe motion reference and get distracted.
-            geom.group = 3
+            if hide_collision_geom:
+                # Hide collision bodies in motion-reference visualization.
+                geom.group = 4
+                geom.rgba[:] = (0.0, 0.0, 0.0, 0.0)
+            else:
+                # Keep reference visual geoms visible while excluding them from
+                # depth camera rays (camera include groups are 0 and 2).
+                geom.group = 1
 
 
 @dataclass(kw_only=True)
@@ -262,25 +179,8 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
 
     env_spacing: float = 4.0
 
-
-    # robots
-    robot: ArticulationCfg = None  # Set by concrete env cfg subclass
-
-    # robot reference articulation
-    robot_reference: ArticulationCfg = None
-
-    # motion reference
-    motion_reference: MotionReferenceManagerCfg = None  # Set by concrete env cfg subclass
-
     # terrain
-    # Set use_stl_heightfield=True to use STLHeightfieldTerrainCfg (heightfield for both visual+collision)
-    # Set use_stl_heightfield=False to use MotionMatchedTerrainCfg (mesh visual + hfield collision)
-    use_stl_heightfield: bool = True
-
     terrain: object = field(default_factory=lambda: TerrainImporterCfg(
-        prim_path="/World/ground",
-        # terrain_type="plane",
-        # terrain_generator=None,
         terrain_type="hacked_generator",
         terrain_generator=FiledTerrainGeneratorCfg(
             size=(9, 12),
@@ -290,52 +190,73 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
             num_cols=7,
             add_lights=True,
             sub_terrains={
-                # STLHeightfieldTerrainCfg: uses heightfield for BOTH visualization and collision.
-                # Suitable for 3D-scanned concave terrains (floor with thin walls).
-                # All terrain floors are aligned to the same plane via hfield_floor_z_offset.
-                "stl_heightfield": STLHeightfieldTerrainCfg(
+                # MotionMatchedTerrainCfg keeps motion-terrain pairing from metadata.yaml.
+                # Use CoACD collision to avoid MuJoCo mesh convex-hull filling issues.
+                "motion_matched": MotionMatchedTerrainCfg(
                     proportion=1.0,
                     path="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
                     metadata_yaml="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
-                    hfield_resolution=0.02,  # 2 cm resolution
-                    hfield_base_thickness=0.1,  # Fixed 10cm base thickness
-                    hfield_use_disk_cache=True,
-                    hfield_sink_miss_cells=True,
-                    hfield_floor_z_offset=0.0,  # Adjust if floors need alignment
+                    collision_coacd=True,
+                    collision_coacd_prewarm_all=True,
+                    collision_coacd_prewarm_workers=0,
+                    collision_coacd_threshold=0.06,
+                    collision_coacd_preprocess_mode="on",
+                    collision_coacd_resolution=2500,
+                    # MJWarp EPA horizon is fixed at 24; decimate each CoACD hull
+                    # to keep per-hull silhouette complexity bounded.
+                    collision_coacd_decimate=True,
+                    collision_coacd_max_ch_vertex=16,
+                    collision_coacd_visualize_collision_hulls=False,
+                    collision_coacd_collision_geom_group=2,
+                    collision_coacd_collision_geom_rgba=(0.84, 0.85, 0.87, 1.0),
+                    collision_coacd_hide_source_visual_mesh=True,
                 ),
             },
         ),
-        physics_material=None,
-        visual_material=None,
     ))
-
-
-    # lights
-    light: object = field(default_factory=lambda: AssetBaseCfg(
-        prim_path="/World/light",
-        spawn=None,
-    ))
-
-    sky_light: object = field(default_factory=lambda: AssetBaseCfg(
-        prim_path="/World/skyLight",
-        spawn=None,
-    ))
-
 
     # sensors
-    height_scanner: object = field(default_factory=lambda: RayCasterCfg(
+    sensors: tuple[SensorCfg, ...] = field(default_factory=lambda: make_perceptive_scene_sensors())
+
+
+    def __post_init__(self):
+        if self.spec_fn is None:
+            self.spec_fn = _edit_perceptive_scene_spec
+
+
+def make_perceptive_scene_entities(
+    *,
+    robot: EntityCfg | None = None,
+    robot_reference: EntityCfg | None = None,
+) -> dict[str, EntityCfg]:
+    """Build perceptive scene entities without bridge fields."""
+    # robots
+    # robot reference articulation
+    # motion reference is configured as a sensor cfg ("motion_reference").
+    entities: dict[str, EntityCfg] = {}
+    if robot is not None:
+        entities["robot"] = robot
+    if robot_reference is not None:
+        entities["robot_reference"] = robot_reference
+    return entities
+
+
+def _make_perceptive_height_scanner_sensor_cfg() -> RayCastSensorCfg:
+    return RayCastSensorCfg(
         name="height_scanner",
         frame=ObjRef(type="body", name="torso_link", entity="robot"),
-        pattern=patterns.GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
+        pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
         ray_alignment="yaw",
         max_distance=30.0,
         debug_vis=False,
-    ))
+    )
 
-    camera: object = field(default_factory=lambda: NoisyGroupedRayCasterCameraCfg(
+
+def _make_perceptive_camera_sensor_cfg() -> NoisyGroupedRayCasterCameraCfg:
+    return NoisyGroupedRayCasterCameraCfg(
         name="camera",
         frame=ObjRef(type="body", name="torso_link", entity="robot"),
-        pattern=patterns.PinholeCameraPatternCfg(
+        pattern=PinholeCameraPatternCfg(
             height=int(270 / 10),
             width=int(480 / 10),
             fovy=58.0,
@@ -390,13 +311,16 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
             ),
         },
         # data_histories={"distance_to_image_plane": 5},
+        update_period=1 / 60,
         debug_vis=False,
         depth_clipping_behavior="max",  # clip to the maximum value
         min_distance=0.05,
         max_distance=1e6,
-    ))
+    )
 
-    contact_forces: object = field(default_factory=lambda: ContactSensorCfg(
+
+def _make_perceptive_contact_forces_sensor_cfg() -> ContactSensorCfg:
+    return ContactSensorCfg(
         name="contact_forces",
         primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
         secondary=ContactMatch(mode="body", pattern="terrain"),
@@ -404,33 +328,58 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
         reduce="maxforce",
         history_length=3,
         track_air_time=True,
-    ))
+    )
 
 
-    def __post_init__(self):
-        if self.spec_fn is None:
-            self.spec_fn = _edit_perceptive_scene_spec
-        # Bridge Isaac Lab-style class attributes into mjlab entities dict / sensors tuple
-        if self.robot is not None:
-            self.entities["robot"] = self.robot
-        if self.robot_reference is not None:
-            self.entities["robot_reference"] = self.robot_reference
-        sensor_list = []
-        if self.contact_forces is not None:
-            sensor_list.append(self.contact_forces)
-        if self.height_scanner is not None:
-            sensor_list.append(self.height_scanner)
-        if self.camera is not None:
-            sensor_list.append(self.camera)
-        if self.motion_reference is not None:
-            sensor_list.append(self.motion_reference)
-        self.sensors = tuple(sensor_list)
+def make_perceptive_scene_sensors(
+    *,
+    motion_reference: MotionReferenceManagerCfg | None = None,
+    include_height_scanner: bool = True,
+) -> tuple[SensorCfg, ...]:
+    """Build perceptive scene sensors without bridge fields."""
+    # lights are applied in _edit_perceptive_scene_spec.
+    sensor_list: list[SensorCfg] = [_make_perceptive_contact_forces_sensor_cfg()]
+    if include_height_scanner:
+        sensor_list.append(_make_perceptive_height_scanner_sensor_cfg())
+    sensor_list.append(_make_perceptive_camera_sensor_cfg())
+    if motion_reference is not None:
+        sensor_list.append(motion_reference)
+    return tuple(sensor_list)
 
-        if self.motion_reference is None or self.motion_reference.reference_entity_name is None:
-            if "robot_reference" in self.entities:
-                del self.entities["robot_reference"]
-            if hasattr(self, "robot_reference"):
-                delattr(self, "robot_reference")
+
+def get_scene_entity_cfg(scene: InteractiveSceneCfg, entity_name: str) -> EntityCfg:
+    """Get scene entity config by name."""
+    return scene.entities[entity_name]
+
+
+def get_scene_sensor_cfg(scene: InteractiveSceneCfg, sensor_name: str) -> SensorCfg:
+    """Get scene sensor config by name."""
+    return next(
+        sensor_cfg
+        for sensor_cfg in scene.sensors
+        if getattr(sensor_cfg, "name", None) == sensor_name
+    )
+
+
+def remove_scene_sensor_cfg(scene: InteractiveSceneCfg, sensor_name: str) -> None:
+    """Remove a sensor cfg from scene.sensors by name."""
+    scene.sensors = tuple(
+        sensor_cfg
+        for sensor_cfg in scene.sensors
+        if getattr(sensor_cfg, "name", None) != sensor_name
+    )
+
+
+def get_motion_reference_cfg(scene: InteractiveSceneCfg) -> MotionReferenceManagerCfg:
+    """Get motion reference sensor cfg from scene."""
+    sensor_cfg = get_scene_sensor_cfg(scene, "motion_reference")
+    return sensor_cfg  # type: ignore[return-value]
+
+
+def get_camera_sensor_cfg(scene: InteractiveSceneCfg) -> NoisyGroupedRayCasterCameraCfg:
+    """Get camera sensor cfg from scene."""
+    sensor_cfg = get_scene_sensor_cfg(scene, "camera")
+    return sensor_cfg  # type: ignore[return-value]
 
 
 def make_perceptive_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg]:
@@ -731,11 +680,10 @@ def make_events() -> dict[str, EventTermCfg]:
     return {
         # domain rand
         "physics_material": EventTermCfg(
-            func=mdp.randomize_field,
+            func=mdp.dr.geom_friction,
             mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg("robot", geom_names=".*"),
-                "field": "geom_friction",
                 "ranges": {
                     0: (1.25, 2.0),
                     1: (1.2, 1.8),
@@ -787,7 +735,7 @@ def make_events() -> dict[str, EventTermCfg]:
         ),
 
         "randomize_actuator_gains": EventTermCfg(
-            func=mdp.randomize_pd_gains,
+            func=mdp.dr.pd_gains,
             mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg("robot"),
@@ -799,7 +747,7 @@ def make_events() -> dict[str, EventTermCfg]:
         ),
 
         "randomize_rigid_body_mass": EventTermCfg(
-            func=mdp.randomize_field,
+            func=mdp.dr.body_mass,
             mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg(
@@ -812,7 +760,6 @@ def make_events() -> dict[str, EventTermCfg]:
                         "right_wrist.*",
                     ],
                 ),
-                "field": "body_mass",
                 "ranges": (0.8, 1.2),
                 "operation": "scale",
                 "distribution": "uniform",
@@ -990,7 +937,7 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
                 robot_cfg=SceneEntityCfg("robot"),
                 motion_reference_cfg=SceneEntityCfg("motion_reference"),
                 in_base_frame=True,
-                check_at_keyframe_threshold=0.03,
+                check_at_keyframe_threshold=-1,
             ),
         ),
 
@@ -1047,6 +994,7 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
 @dataclass(kw_only=True)
 class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
     scene: PerceptiveShadowingSceneCfg = field(default_factory=lambda: PerceptiveShadowingSceneCfg())
+    decimation: int = 4
     commands: dict = field(default_factory=make_perceptive_commands)
     actions: dict = field(default_factory=make_actions)
     observations: dict = field(default_factory=make_observations)
@@ -1057,14 +1005,11 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
     monitors: dict = field(default_factory=make_monitors)
 
     def __post_init__(self):
+        # All managers are already dicts, no conversion needed!
         # general settings
         self.decimation = 4
         self.episode_length_s = 10.0
         # simulation settings
         self.sim.mujoco.timestep = 1.0 / 50.0 / self.decimation
-        # Let mujoco-warp auto-infer nconmax/njmax — hfield collision generates more
-        # contacts per step than CoACD hulls, so a fixed cap easily overflows.
-        self.sim.nconmax = None
-        self.sim.njmax = None
-
-        # All managers are already dicts, no conversion needed!
+        self.sim.nconmax = 128
+        self.sim.njmax = 512

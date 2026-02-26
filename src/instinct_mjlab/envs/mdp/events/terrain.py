@@ -22,32 +22,14 @@ def register_virtual_obstacle_to_sensor(
     if isinstance(sensor_cfgs, SceneEntityCfg):
         sensor_cfgs = [sensor_cfgs]
 
-    if env.scene.terrain is None:
-        raise RuntimeError(
-            "register_virtual_obstacle_to_sensor requires a terrain, but env.scene.terrain is None."
-        )
-    if not hasattr(env.scene.terrain, "virtual_obstacles"):
-        raise TypeError(
-            "register_virtual_obstacle_to_sensor requires terrain.virtual_obstacles support. "
-            f"Got terrain type: {type(env.scene.terrain).__name__}."
-        )
     virtual_obstacles: dict = env.scene.terrain.virtual_obstacles
 
     for sensor_cfg in sensor_cfgs:
-        if sensor_cfg.name not in env.scene.sensors:
-            raise KeyError(f"Sensor '{sensor_cfg.name}' is not registered in env.scene.sensors.")
         sensor = env.scene[sensor_cfg.name]
         if not hasattr(sensor, "register_virtual_obstacles"):
-            raise TypeError(
-                f"Sensor '{sensor_cfg.name}' does not implement register_virtual_obstacles()."
-            )
+            raise ValueError(f"Sensor {sensor_cfg.name} does not support virtual obstacles.")
 
         sensor.register_virtual_obstacles(virtual_obstacles)
 
     if enable_debug_vis:
-        if not hasattr(env.scene.terrain, "set_debug_vis"):
-            raise TypeError(
-                "register_virtual_obstacle_to_sensor requires terrain.set_debug_vis() when "
-                "enable_debug_vis=True."
-            )
         env.scene.terrain.set_debug_vis(True)

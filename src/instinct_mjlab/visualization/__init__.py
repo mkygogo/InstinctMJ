@@ -1,6 +1,4 @@
-from instinct_mjlab.visualization.markers import BLUE_ARROW_X_MARKER_CFG as BLUE_ARROW_X_MARKER_CFG
-from instinct_mjlab.visualization.markers import FRAME_MARKER_CFG as FRAME_MARKER_CFG
-from instinct_mjlab.visualization.markers import RED_ARROW_X_MARKER_CFG as RED_ARROW_X_MARKER_CFG
-from instinct_mjlab.visualization.markers import VisualizationMarkers as VisualizationMarkers
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg as VisualizationMarkersCfg
-
+from instinct_mjlab.visualization.marker_cfg import BLUE_ARROW_X_MARKER_CFG as BLUE_ARROW_X_MARKER_CFG
+from instinct_mjlab.visualization.marker_cfg import FRAME_MARKER_CFG as FRAME_MARKER_CFG
+from instinct_mjlab.visualization.marker_cfg import RED_ARROW_X_MARKER_CFG as RED_ARROW_X_MARKER_CFG
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg as VisualizationMarkersCfg

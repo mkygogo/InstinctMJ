@@ -25,10 +25,9 @@ def randomize_rigid_body_material(
   make_consistent: bool = True,
 ) -> None:
   del num_buckets
-  envs_mdp.randomize_field(
+  envs_mdp.dr.geom_friction(
     env=env,
     env_ids=env_ids,
-    field="geom_friction",
     ranges={
       0: static_friction_range,
       1: dynamic_friction_range,
@@ -36,6 +35,7 @@ def randomize_rigid_body_material(
     },
     operation="abs",
     asset_cfg=asset_cfg,
+    axes=[0, 1, 2],
     shared_random=make_consistent,
   )
 

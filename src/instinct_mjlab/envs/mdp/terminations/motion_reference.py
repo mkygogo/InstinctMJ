@@ -9,7 +9,7 @@ from mjlab.managers import ManagerTermBase, SceneEntityCfg
 import instinct_mjlab.motion_reference.utils as motion_reference_utils
 
 if TYPE_CHECKING:
-    from mjlab.assets import Articulation
+    from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedRLEnv
 
     from instinct_mjlab.motion_reference import MotionReferenceManager
@@ -67,7 +67,7 @@ class joint_pos_far_from_ref(ManagerTermBase):
         super().__init__(cfg, env)
         self.exclude_joint_indices = []
         if cfg.params.get("exclude_joint_names", []):
-            robot_asset: Articulation = env.scene[cfg.params["asset_cfg"].name]
+            robot_asset: Entity = env.scene[cfg.params["asset_cfg"].name]
             for joint_name in cfg.params["exclude_joint_names"]:
                 self.exclude_joint_indices += robot_asset.find_joints(joint_name)[0]
 
@@ -170,7 +170,7 @@ def rot_far_from_ref(
     Returns:
         True if the rotation is far from the reference rotation, False otherwise.
     """
-    robot: Articulation = env.scene[asset_cfg.name]
+    robot: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # get the current rotation
@@ -204,7 +204,7 @@ def projected_gravity_far_from_ref(
 ) -> torch.Tensor:
     """Check if the projected gravity is far from the reference projected gravity."""
 
-    robot: Articulation = env.scene[asset_cfg.name]
+    robot: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # get the current rotation

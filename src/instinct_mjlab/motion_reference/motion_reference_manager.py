@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from mjlab.utils.lab_api import math as math_utils
 import mjlab.utils.lab_api.string as string_utils
-from instinct_mjlab.visualization.markers import VisualizationMarkers
 from mjlab.scene import Scene
 from mjlab.sensor import Sensor
 from instinct_mjlab.utils.timestamped_buffer import TimestampedBuffer
@@ -1114,50 +1113,8 @@ class MotionReferenceManager(Sensor):
             return
 
         if self.cfg.visualizing_marker_types:
-            if not hasattr(self, "_visualizer"):
-                self._visualizer = VisualizationMarkers(self.cfg.visualizer_cfg)
-            aiming_frame_idx = self.aiming_frame_idx
-
-            pos_list = []
-            quat_list = []
-            index_list = []
-
-            if "root" in self.cfg.visualizing_marker_types:
-                root_pos_w = self.data.base_pos_w[self.ALL_INDICES, aiming_frame_idx]
-                root_quat_w = self.data.base_quat_w[self.ALL_INDICES, aiming_frame_idx]
-                root_indices = torch.zeros(self._num_envs, device=self.device, dtype=torch.long)
-
-                pos_list.append(root_pos_w.reshape(-1, 3))
-                quat_list.append(root_quat_w.reshape(-1, 4))
-                index_list.append(root_indices.reshape(-1))
-
-            if "links" in self.cfg.visualizing_marker_types:
-                link_pos_w = self.data.link_pos_w[self.ALL_INDICES, aiming_frame_idx]
-                link_quat_w = self.data.link_quat_w[self.ALL_INDICES, aiming_frame_idx]
-                link_indices = torch.ones(link_pos_w.shape[:2], device=self.device, dtype=torch.long)
-
-                pos_list.append(link_pos_w.reshape(-1, 3))
-                quat_list.append(link_quat_w.reshape(-1, 4))
-                index_list.append(link_indices.reshape(-1))
-
-            if "relative_links" in self.cfg.visualizing_marker_types:
-                relative_link_pos_w = self.reference_link_pos_relative_w
-                relative_link_quat_w = self.reference_link_quat_relative_w
-                relative_link_indices = torch.ones(relative_link_pos_w.shape[:2], device=self.device, dtype=torch.long) * 2
-
-                pos_list.append(relative_link_pos_w.reshape(-1, 3))
-                quat_list.append(relative_link_quat_w.reshape(-1, 4))
-                index_list.append(relative_link_indices.reshape(-1))
-
-            if pos_list:
-                pos_w = torch.cat(pos_list, dim=0)
-                quat_w = torch.cat(quat_list, dim=0)
-                marker_indices = torch.cat(index_list, dim=0)
-                self._visualizer.visualize(
-                    translations=pos_w,
-                    orientations=quat_w,
-                    marker_indices=marker_indices,
-                )
+            # Legacy IsaacLab marker pipeline removed in mjlab-native mode.
+            pass
 
         if not hasattr(self, "_reference_entity"):
             self._find_reference_view()

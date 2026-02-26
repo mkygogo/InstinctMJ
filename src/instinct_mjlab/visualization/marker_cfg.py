@@ -29,19 +29,6 @@ class VisualizationMarkersCfg:
     return cfg
 
 
-class VisualizationMarkers:
-  def __init__(self, cfg: VisualizationMarkersCfg):
-    self.cfg = cfg
-    self._visible = True
-
-  def set_visibility(self, visible: bool) -> None:
-    self._visible = bool(visible)
-
-  def visualize(self, *args, **kwargs) -> None:
-    del args, kwargs
-    return None
-
-
 @dataclass
 class _PrimitiveMarkerCfg:
   scale: tuple[float, float, float] = (0.15, 0.15, 0.15)
@@ -61,3 +48,10 @@ BLUE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
   markers={"arrow": _PrimitiveMarkerCfg(scale=(0.35, 0.05, 0.05), color=(0.0, 0.0, 1.0, 1.0))},
 )
 
+
+__all__ = [
+  "VisualizationMarkersCfg",
+  "FRAME_MARKER_CFG",
+  "RED_ARROW_X_MARKER_CFG",
+  "BLUE_ARROW_X_MARKER_CFG",
+]

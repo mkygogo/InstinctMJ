@@ -10,7 +10,6 @@ import torch
 
 from mjlab.entity import Entity
 from mjlab.entity.data import compute_velocity_from_cvel
-from instinct_mjlab.visualization.markers import VisualizationMarkers
 from mjlab.sensor import Sensor
 from mjlab.utils.lab_api import math as math_utils
 from mjlab.utils.lab_api import string as string_utils
@@ -18,8 +17,6 @@ from mjlab.utils.lab_api import string as string_utils
 from .volume_points_data import VolumePointsData
 
 if TYPE_CHECKING:
-    from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
-
     from .volume_points_cfg import VolumePointsCfg
 
 
@@ -203,23 +200,37 @@ class VolumePoints(Sensor[VolumePointsData]):
         self._sensor_data.penetration_offset[env_ids] = penetration_offset_buf
 
     def debug_vis(self, visualizer) -> None:
-        del visualizer
         if not self.cfg.debug_vis or self._sensor_data is None:
             return
-        if not hasattr(self, "points_visualizer"):
-            self.points_visualizer = VisualizationMarkers(self.cfg.visualizer_cfg)
-        points = self._sensor_data.points_pos_w.view(-1, 3)  # (N_*B*P, 3)
-        penetrated = torch.norm(self._sensor_data.penetration_offset.view(-1, 3), dim=-1) > 0.0  # (N_*B*P,)
+        env_ids = list(visualizer.get_env_indices(self._num_envs))
+        if not env_ids:
+            return
 
-        # add penetrated points if none
+        marker_cfgs = getattr(self.cfg.visualizer_cfg, "markers", {})
+        sphere_cfg = marker_cfgs.get("sphere", None)
+        sphere_penetrated_cfg = marker_cfgs.get("sphere_penetrated", None)
+
+        normal_radius = float(getattr(sphere_cfg, "radius", 0.01))
+        normal_color = tuple(getattr(sphere_cfg, "color", (0.0, 1.0, 0.0, 1.0)))
+        penetrated_radius = float(getattr(sphere_penetrated_cfg, "radius", normal_radius))
+        penetrated_color = tuple(getattr(sphere_penetrated_cfg, "color", (1.0, 0.0, 0.0, 1.0)))
+
+        points = self._sensor_data.points_pos_w[env_ids].reshape(-1, 3)
+        penetrated = torch.norm(self._sensor_data.penetration_offset[env_ids].reshape(-1, 3), dim=-1) > 0.0
+
+        # Keep parity with InstinctLab semantics:
+        # if no penetrated points exist, add one red point placeholder.
         if not torch.any(penetrated):
             points = torch.cat([points, torch.zeros_like(points[:1])], dim=0)
             penetrated = torch.cat([penetrated, torch.tensor([True], device=points.device)], dim=0)
 
-        self.points_visualizer.visualize(
-            translations=points,
-            marker_indices=penetrated.long(),
-        )
+        normal_points = points[~penetrated]
+        penetrated_points = points[penetrated]
+
+        for point in normal_points:
+            visualizer.add_sphere(center=point, radius=normal_radius, color=normal_color)
+        for point in penetrated_points:
+            visualizer.add_sphere(center=point, radius=penetrated_radius, color=penetrated_color)
 
     # -- private helpers --
 

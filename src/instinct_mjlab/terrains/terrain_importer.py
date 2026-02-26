@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import math
 import numpy as np
 import torch
@@ -12,6 +13,8 @@ import mujoco
 from mjlab.terrains import SubTerrainCfg as SubTerrainBaseCfg
 from mjlab.terrains import TerrainGenerator
 from mjlab.terrains import TerrainImporter as TerrainImporterBase
+
+from .height_field.utils import convert_height_field_to_mesh
 
 
 class Timer:
@@ -51,6 +54,14 @@ class TerrainImporter(TerrainImporterBase):
                 "virtual_obstacle_source must be 'mesh' or 'heightfield'. "
                 f"Got: {self._virtual_obstacle_source!r}"
             )
+        self._virtual_obstacle_hfield_method = str(
+            getattr(cfg, "virtual_obstacle_hfield_method", "mesh_like")
+        ).lower()
+        if self._virtual_obstacle_hfield_method != "mesh_like":
+            raise ValueError(
+                "virtual_obstacle_hfield_method must be 'mesh_like'. "
+                f"Got: {self._virtual_obstacle_hfield_method!r}"
+            )
         self._virtual_obstacles = {}
         for name, virtual_obstacle_cfg in cfg.virtual_obstacles.items():
             if virtual_obstacle_cfg is None:
@@ -67,6 +78,7 @@ class TerrainImporter(TerrainImporterBase):
         # -----------------------------------------------------------------------------
         self.cfg = cfg_runtime
         self.device = device
+        self._device = device
         self._spec = mujoco.MjSpec()
         self.env_origins = None
         self.terrain_origins = None
@@ -122,6 +134,14 @@ class TerrainImporter(TerrainImporterBase):
         if self._collision_debug_vis:
             self._apply_collision_debug_visual_style()
 
+        # Keep Entity internals aligned with mjlab's initialization flow after
+        # building terrain spec manually in this compatibility importer.
+        self._actuators = []
+        self._identify_joints()
+        self._apply_spec_editors()
+        self._add_actuators()
+        self._add_initial_state_keyframe()
+
     @property
     def virtual_obstacles(self) -> dict[str, VirtualObstacleBase]:
         """Get the virtual obstacles representing the edges.
@@ -166,170 +186,295 @@ class TerrainImporter(TerrainImporterBase):
                 virtual_obstacle.generate(mesh, device=self.device)
 
     @staticmethod
-    def _iter_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
-        """Return inclusive index ranges of contiguous True runs."""
-        runs: list[tuple[int, int]] = []
-        idx = 0
-        while idx < mask.size:
-            if not bool(mask[idx]):
-                idx += 1
+    def _simplify_polyline_collinear_indices(
+        points_xyz: np.ndarray,
+        *,
+        distance_epsilon: float,
+        angle_threshold_deg: float,
+    ) -> np.ndarray:
+        """Simplify polyline by removing only near-collinear interior points."""
+        num_points = points_xyz.shape[0]
+        if num_points <= 2:
+            return np.arange(num_points, dtype=np.int64)
+
+        dist_eps = max(float(distance_epsilon), 0.0)
+        sin_threshold = math.sin(math.radians(max(float(angle_threshold_deg), 0.0)))
+
+        keep: list[int] = [0]
+        prev_kept = 0
+        for idx in range(1, num_points - 1):
+            prev_point = points_xyz[prev_kept, :2]
+            current_point = points_xyz[idx, :2]
+            next_point = points_xyz[idx + 1, :2]
+
+            vec_a = current_point - prev_point
+            vec_b = next_point - current_point
+            norm_a = float(np.linalg.norm(vec_a))
+            norm_b = float(np.linalg.norm(vec_b))
+            if norm_a <= 1.0e-12 or norm_b <= 1.0e-12:
+                keep.append(idx)
+                prev_kept = idx
                 continue
-            start = idx
-            while idx + 1 < mask.size and bool(mask[idx + 1]):
-                idx += 1
-            runs.append((start, idx))
-            idx += 1
-        return runs
+
+            cross_mag = abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
+            sin_angle = cross_mag / max(norm_a * norm_b, 1.0e-12)
+            if sin_angle > sin_threshold:
+                keep.append(idx)
+                prev_kept = idx
+                continue
+
+            line_vec = next_point - prev_point
+            line_len = float(np.linalg.norm(line_vec))
+            if line_len <= 1.0e-12:
+                keep.append(idx)
+                prev_kept = idx
+                continue
+            rel = current_point - prev_point
+            line_dist = abs(line_vec[0] * rel[1] - line_vec[1] * rel[0]) / line_len
+            if line_dist > dist_eps:
+                keep.append(idx)
+                prev_kept = idx
+
+        keep.append(num_points - 1)
+        return np.asarray(keep, dtype=np.int64)
 
     @staticmethod
-    def _active_interval_runs_with_vertex_split(
-        interval_active: np.ndarray,
-        vertex_coord: np.ndarray,
-        enforce_vertex_coord_continuity: bool,
-    ) -> list[tuple[int, int]]:
-        """Return active interval runs, optionally split when projected vertex coord changes."""
-        if not enforce_vertex_coord_continuity:
-            return TerrainImporter._iter_true_runs(interval_active)
+    def _trace_segments_as_graph_polylines(
+        edge_segments: np.ndarray,
+        *,
+        simplify_epsilon: float,
+        min_segment_length: float,
+        snap_xy: float | None,
+        snap_z: float | None,
+        collinear_angle_threshold: float,
+    ) -> np.ndarray:
+        """Trace primitive edge segments into continuous graph polylines."""
+        if edge_segments.size == 0:
+            return np.empty((0, 6), dtype=np.float32)
 
-        runs: list[tuple[int, int]] = []
-        start: int | None = None
-        for interval_idx, is_active in enumerate(interval_active):
-            if not bool(is_active):
-                if start is not None:
-                    runs.append((start, interval_idx - 1))
-                    start = None
+        segments = edge_segments.reshape(-1, 6).astype(np.float64, copy=False)
+        if segments.shape[0] == 0:
+            return np.empty((0, 6), dtype=np.float32)
+
+        if snap_xy is None or float(snap_xy) <= 0.0:
+            primitive_len = np.linalg.norm(segments[:, 3:5] - segments[:, 0:2], axis=1)
+            positive = primitive_len[primitive_len > 1.0e-9]
+            if positive.size == 0:
+                snap_xy_local = 1.0e-4
+            else:
+                snap_xy_local = max(float(np.median(positive)) * 0.25, 1.0e-4)
+        else:
+            snap_xy_local = float(snap_xy)
+
+        if snap_z is None or float(snap_z) <= 0.0:
+            endpoint_z = np.concatenate([segments[:, 2], segments[:, 5]], axis=0)
+            unique_z = np.unique(np.round(endpoint_z, decimals=4))
+            if unique_z.size <= 1:
+                snap_z_local = 1.0e-3
+            else:
+                z_deltas = np.diff(np.sort(unique_z))
+                positive_deltas = z_deltas[z_deltas > 1.0e-6]
+                if positive_deltas.size == 0:
+                    snap_z_local = 1.0e-3
+                else:
+                    snap_z_local = max(float(np.median(positive_deltas)) * 0.5, 1.0e-3)
+        else:
+            snap_z_local = float(snap_z)
+
+        node_map: dict[tuple[int, int, int], int] = {}
+        node_xyz_sum: list[np.ndarray] = []
+        node_count: list[int] = []
+
+        def node_id_from_point(point_xyz: np.ndarray) -> int:
+            key = (
+                int(np.round(float(point_xyz[0]) / snap_xy_local)),
+                int(np.round(float(point_xyz[1]) / snap_xy_local)),
+                int(np.round(float(point_xyz[2]) / snap_z_local)),
+            )
+            node_id = node_map.get(key)
+            if node_id is None:
+                node_id = len(node_xyz_sum)
+                node_map[key] = node_id
+                node_xyz_sum.append(np.asarray(point_xyz, dtype=np.float64).copy())
+                node_count.append(1)
+                return node_id
+            node_xyz_sum[node_id] = node_xyz_sum[node_id] + np.asarray(point_xyz, dtype=np.float64)
+            node_count[node_id] += 1
+            return node_id
+
+        edges: list[tuple[int, int]] = []
+        edge_key_set: set[tuple[int, int]] = set()
+        for segment in segments:
+            start_id = node_id_from_point(segment[:3])
+            end_id = node_id_from_point(segment[3:6])
+            if start_id == end_id:
                 continue
-            if start is None:
-                start = interval_idx
+            edge_key = (start_id, end_id) if start_id < end_id else (end_id, start_id)
+            if edge_key in edge_key_set:
                 continue
-            # Split run when the projected edge switches side at shared vertex.
-            if not np.isclose(vertex_coord[interval_idx], vertex_coord[interval_idx - 1]):
-                runs.append((start, interval_idx - 1))
-                start = interval_idx
-        if start is not None:
-            runs.append((start, interval_active.size - 1))
-        return runs
+            edge_key_set.add(edge_key)
+            edges.append(edge_key)
+
+        if len(edges) == 0:
+            return np.empty((0, 6), dtype=np.float32)
+
+        adjacency: list[list[int]] = [[] for _ in range(len(node_xyz_sum))]
+        for edge_id, (u, v) in enumerate(edges):
+            adjacency[u].append(edge_id)
+            adjacency[v].append(edge_id)
+
+        visited = np.zeros(len(edges), dtype=bool)
+
+        def edge_other_node(edge_id: int, node_id: int) -> int:
+            u, v = edges[edge_id]
+            return v if u == node_id else u
+
+        def trace_from(node_start: int, edge_start: int) -> list[int]:
+            path = [node_start]
+            current_node = node_start
+            current_edge = edge_start
+            while True:
+                if visited[current_edge]:
+                    break
+                visited[current_edge] = True
+                next_node = edge_other_node(current_edge, current_node)
+                path.append(next_node)
+                current_node = next_node
+                if len(adjacency[current_node]) != 2:
+                    break
+                next_edge = -1
+                for edge_candidate in adjacency[current_node]:
+                    if not visited[edge_candidate]:
+                        next_edge = edge_candidate
+                        break
+                if next_edge < 0:
+                    break
+                current_edge = next_edge
+            return path
+
+        polylines: list[list[int]] = []
+        # Start traces from branch/end nodes first.
+        for node_id, node_edges in enumerate(adjacency):
+            if len(node_edges) == 2:
+                continue
+            for edge_id in node_edges:
+                if visited[edge_id]:
+                    continue
+                polylines.append(trace_from(node_id, edge_id))
+        # Handle closed loops where every node degree is exactly 2.
+        for edge_id in range(len(edges)):
+            if visited[edge_id]:
+                continue
+            node_start = edges[edge_id][0]
+            polylines.append(trace_from(node_start, edge_id))
+
+        node_xyz = np.asarray(node_xyz_sum, dtype=np.float64)
+        node_count_arr = np.asarray(node_count, dtype=np.float64).reshape(-1, 1)
+        node_xyz = node_xyz / np.maximum(node_count_arr, 1.0)
+        simplify_eps = max(float(simplify_epsilon), 0.0)
+        min_seg_len = max(float(min_segment_length), 0.0)
+
+        traced_segments: list[np.ndarray] = []
+        for node_path in polylines:
+            if len(node_path) < 2:
+                continue
+            polyline = node_xyz[np.asarray(node_path, dtype=np.int64)]
+            if simplify_eps > 0.0 and polyline.shape[0] > 2:
+                keep_indices = TerrainImporter._simplify_polyline_collinear_indices(
+                    polyline,
+                    distance_epsilon=simplify_eps,
+                    angle_threshold_deg=collinear_angle_threshold,
+                )
+                polyline = polyline[keep_indices]
+            if polyline.shape[0] < 2:
+                continue
+            for idx in range(polyline.shape[0] - 1):
+                point_a = polyline[idx]
+                point_b = polyline[idx + 1]
+                if np.linalg.norm(point_b[:2] - point_a[:2]) < min_seg_len:
+                    continue
+                traced_segments.append(np.concatenate([point_a, point_b]))
+
+        if len(traced_segments) == 0:
+            return np.empty((0, 6), dtype=np.float32)
+        return np.asarray(traced_segments, dtype=np.float32).reshape(-1, 6)
 
     @staticmethod
-    def _extract_edge_segments_from_hfield(
+    def _hfield_spec_to_world_mesh(
         hfield_spec,
         geom_pos: np.ndarray,
-        angle_threshold: float,
-        height_threshold: float | None,
-        merge_runs: bool,
-        project_to_high_side: bool,
-    ) -> np.ndarray:
-        """Extract edge line segments directly from one MuJoCo hfield surface."""
+        slope_threshold: float | None = None,
+    ) -> trimesh.Trimesh | None:
+        """Convert one MuJoCo hfield spec + geom pose into world-frame trimesh."""
         nrow = int(getattr(hfield_spec, "nrow", 0))
         ncol = int(getattr(hfield_spec, "ncol", 0))
         if nrow <= 1 or ncol <= 1:
-            return np.empty((0, 6), dtype=np.float32)
+            return None
 
         userdata = np.asarray(getattr(hfield_spec, "userdata", []), dtype=np.float64)
         if userdata.size != nrow * ncol:
-            return np.empty((0, 6), dtype=np.float32)
-        normalized_height = userdata.reshape(nrow, ncol)
+            return None
+        normalized_heights = userdata.reshape(nrow, ncol)
 
         size = np.asarray(getattr(hfield_spec, "size", []), dtype=np.float64).reshape(-1)
         if size.size < 4:
-            return np.empty((0, 6), dtype=np.float32)
+            return None
         half_x, half_y, elevation_range, _base_thickness = size[:4]
 
-        x_coords = np.linspace(float(geom_pos[0] - half_x), float(geom_pos[0] + half_x), nrow, dtype=np.float64)
-        y_coords = np.linspace(float(geom_pos[1] - half_y), float(geom_pos[1] + half_y), ncol, dtype=np.float64)
-        z_coords = float(geom_pos[2]) + normalized_height * float(elevation_range)
+        # Reconstruct mesh with the same slope-threshold projection behavior as
+        # height-field terrain conversion to reduce hfield triangulation artifacts.
+        heights_m = normalized_heights * float(elevation_range)
+        y_step = (2.0 * float(half_y)) / float(nrow - 1)
+        x_step = (2.0 * float(half_x)) / float(ncol - 1)
+        if y_step <= 0.0 or x_step <= 0.0:
+            return None
 
-        if height_threshold is None:
-            dx = abs(x_coords[1] - x_coords[0]) if nrow > 1 else 0.0
-            dy = abs(y_coords[1] - y_coords[0]) if ncol > 1 else 0.0
-            positive_steps = [v for v in (dx, dy) if v > 0.0]
-            base_step = max(min(positive_steps), 1.0e-6) if len(positive_steps) > 0 else 1.0e-6
-            dz_threshold = math.tan(math.radians(float(angle_threshold))) * base_step
-        else:
-            dz_threshold = float(height_threshold)
-        dz_threshold = max(dz_threshold, 1.0e-6)
+        if slope_threshold is not None:
+            slope_threshold = float(slope_threshold)
+            if slope_threshold <= 0.0:
+                slope_threshold = None
 
-        segments: list[list[float]] = []
+        vertices_local, faces = convert_height_field_to_mesh(
+            height_field=heights_m,
+            horizontal_scale=float(y_step),
+            vertical_scale=1.0,
+            slope_threshold=slope_threshold,
+        )
 
-        # Edges along x-boundaries (vertical lines in XY plane).
-        for i in range(nrow - 1):
-            z0 = z_coords[i, :]
-            z1 = z_coords[i + 1, :]
-            dz_col = np.abs(z1 - z0)
-            interval_active = (dz_col[:-1] > dz_threshold) | (dz_col[1:] > dz_threshold)
-            if not np.any(interval_active):
-                continue
-            z_line = np.maximum(z0, z1)
-            if project_to_high_side:
-                x_line = np.where(z0 >= z1, x_coords[i], x_coords[i + 1])
-            else:
-                x_line = np.full(ncol, 0.5 * (x_coords[i] + x_coords[i + 1]), dtype=np.float64)
+        # `convert_height_field_to_mesh` assumes first axis is x and second is y.
+        # MuJoCo hfield uses rows->y and cols->x, so swap xy and re-scale x span.
+        # Keep vertex indexing untouched so diagonal filtering by index deltas
+        # remains valid for (nrow, ncol) grid topology.
+        vertices = vertices_local.copy()
+        x_ratio = float(x_step / y_step)
+        x_world = float(geom_pos[0] - half_x) + vertices[:, 1] * x_ratio
+        y_world = float(geom_pos[1] - half_y) + vertices[:, 0]
+        z_world = float(geom_pos[2]) + vertices[:, 2]
+        vertices[:, 0] = x_world
+        vertices[:, 1] = y_world
+        vertices[:, 2] = z_world
 
-            if merge_runs:
-                runs = TerrainImporter._active_interval_runs_with_vertex_split(
-                    interval_active=interval_active,
-                    vertex_coord=x_line,
-                    enforce_vertex_coord_continuity=project_to_high_side,
-                )
-                for start, end in runs:
-                    end_vertex = end + 1
-                    segments.append(
-                        [x_line[start], y_coords[start], z_line[start], x_line[end_vertex], y_coords[end_vertex], z_line[end_vertex]]
-                    )
-            else:
-                for j in range(ncol - 1):
-                    if not interval_active[j]:
-                        continue
-                    segments.append([x_line[j], y_coords[j], z_line[j], x_line[j + 1], y_coords[j + 1], z_line[j + 1]])
+        return trimesh.Trimesh(vertices=vertices, faces=faces.astype(np.int32, copy=False), process=False)
 
-        # Edges along y-boundaries (horizontal lines in XY plane).
-        for j in range(ncol - 1):
-            z0 = z_coords[:, j]
-            z1 = z_coords[:, j + 1]
-            dz_row = np.abs(z1 - z0)
-            interval_active = (dz_row[:-1] > dz_threshold) | (dz_row[1:] > dz_threshold)
-            if not np.any(interval_active):
-                continue
-            z_line = np.maximum(z0, z1)
-            if project_to_high_side:
-                y_line = np.where(z0 >= z1, y_coords[j], y_coords[j + 1])
-            else:
-                y_line = np.full(nrow, 0.5 * (y_coords[j] + y_coords[j + 1]), dtype=np.float64)
+    def _get_hfield_mesh_like_slope_threshold(self) -> float | None:
+        """Resolve slope-threshold used when reconstructing hfield surface mesh."""
+        terrain_gen_cfg = getattr(self.cfg, "terrain_generator", None)
+        slope_threshold = getattr(terrain_gen_cfg, "slope_threshold", None)
+        if slope_threshold is None:
+            return None
+        slope_threshold = float(slope_threshold)
+        if slope_threshold <= 0.0:
+            return None
+        return slope_threshold
 
-            if merge_runs:
-                runs = TerrainImporter._active_interval_runs_with_vertex_split(
-                    interval_active=interval_active,
-                    vertex_coord=y_line,
-                    enforce_vertex_coord_continuity=project_to_high_side,
-                )
-                for start, end in runs:
-                    end_vertex = end + 1
-                    segments.append(
-                        [x_coords[start], y_line[start], z_line[start], x_coords[end_vertex], y_line[end_vertex], z_line[end_vertex]]
-                    )
-            else:
-                for i in range(nrow - 1):
-                    if not interval_active[i]:
-                        continue
-                    segments.append([x_coords[i], y_line[i], z_line[i], x_coords[i + 1], y_line[i + 1], z_line[i + 1]])
-
-        if len(segments) == 0:
-            return np.empty((0, 6), dtype=np.float32)
-        return np.asarray(segments, dtype=np.float32)
-
-    def _collect_hfield_edge_segments(
-        self,
-        angle_threshold: float,
-        height_threshold: float | None,
-        merge_runs: bool,
-        project_to_high_side: bool,
-    ) -> np.ndarray:
-        """Collect edge segments from all terrain hfields in the scene spec."""
+    def _collect_hfield_surface_mesh(self) -> trimesh.Trimesh | None:
+        """Collect and concatenate hfield surface meshes from terrain spec."""
         terrain_body = self._spec.body("terrain")
         if terrain_body is None:
-            return np.empty((0, 6), dtype=np.float32)
+            return None
 
-        all_segments: list[np.ndarray] = []
+        slope_threshold = self._get_hfield_mesh_like_slope_threshold()
+        meshes: list[trimesh.Trimesh] = []
         for geom in terrain_body.geoms:
             hfield_name = getattr(geom, "hfieldname", "")
             if not isinstance(hfield_name, str) or hfield_name == "":
@@ -338,54 +483,169 @@ class TerrainImporter(TerrainImporterBase):
             if hfield_spec is None:
                 continue
             geom_pos = np.asarray(getattr(geom, "pos", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
-            segments = self._extract_edge_segments_from_hfield(
-                hfield_spec=hfield_spec,
-                geom_pos=geom_pos,
-                angle_threshold=angle_threshold,
-                height_threshold=height_threshold,
-                merge_runs=merge_runs,
-                project_to_high_side=project_to_high_side,
+            world_mesh = self._hfield_spec_to_world_mesh(
+                hfield_spec,
+                geom_pos,
+                slope_threshold=slope_threshold,
             )
-            if segments.size > 0:
-                all_segments.append(segments)
+            if world_mesh is not None:
+                meshes.append(world_mesh)
 
-        if len(all_segments) == 0:
+        if len(meshes) == 0:
+            return None
+        if len(meshes) == 1:
+            return meshes[0]
+        return trimesh.util.concatenate(meshes)
+
+    def _collect_hfield_mesh_like_edge_segments(
+        self,
+        *,
+        angle_threshold: float,
+        drop_cell_diagonals: bool,
+        trace_segments: bool,
+        min_edge_length: float,
+    ) -> np.ndarray:
+        """Collect sharp edges from hfield-surface mesh while filtering cell diagonals."""
+        terrain_body = self._spec.body("terrain")
+        if terrain_body is None:
             return np.empty((0, 6), dtype=np.float32)
-        return np.concatenate(all_segments, axis=0).astype(np.float32, copy=False)
+
+        slope_threshold = self._get_hfield_mesh_like_slope_threshold()
+        sharp_threshold = np.deg2rad(float(angle_threshold))
+        edge_segments_list: list[np.ndarray] = []
+        for geom in terrain_body.geoms:
+            hfield_name = getattr(geom, "hfieldname", "")
+            if not isinstance(hfield_name, str) or hfield_name == "":
+                continue
+            hfield_spec = self._spec.hfield(hfield_name)
+            if hfield_spec is None:
+                continue
+            ncol = int(getattr(hfield_spec, "ncol", 0))
+            if ncol <= 1:
+                continue
+            geom_pos = np.asarray(getattr(geom, "pos", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
+            world_mesh = self._hfield_spec_to_world_mesh(
+                hfield_spec,
+                geom_pos,
+                slope_threshold=slope_threshold,
+            )
+            if world_mesh is None:
+                continue
+
+            angles = world_mesh.face_adjacency_angles
+            if angles.size == 0:
+                continue
+            sharp_mask = angles > sharp_threshold
+            if not np.any(sharp_mask):
+                continue
+
+            sharp_edges = world_mesh.face_adjacency_edges[sharp_mask]
+            if sharp_edges.size == 0:
+                continue
+
+            if drop_cell_diagonals:
+                start_idx = sharp_edges[:, 0]
+                end_idx = sharp_edges[:, 1]
+                start_row = start_idx // ncol
+                start_col = start_idx % ncol
+                end_row = end_idx // ncol
+                end_col = end_idx % ncol
+                row_delta = np.abs(end_row - start_row)
+                col_delta = np.abs(end_col - start_col)
+                # Structured hfield cell diagonal edges (delta=(1,1)) are
+                # triangulation artifacts and create fragmented pseudo-obstacles.
+                keep_mask = (row_delta + col_delta) == 1
+                sharp_edges = sharp_edges[keep_mask]
+                if sharp_edges.size == 0:
+                    continue
+
+            vertices = world_mesh.vertices
+            edge_segments = np.hstack([vertices[sharp_edges[:, 0]], vertices[sharp_edges[:, 1]]]).astype(
+                np.float32,
+                copy=False,
+            )
+            if min_edge_length > 0.0:
+                edge_lengths = np.linalg.norm(edge_segments[:, 3:6] - edge_segments[:, 0:3], axis=1)
+                edge_segments = edge_segments[edge_lengths >= min_edge_length]
+                if edge_segments.size == 0:
+                    continue
+            edge_segments_list.append(edge_segments)
+
+        if len(edge_segments_list) == 0:
+            return np.empty((0, 6), dtype=np.float32)
+        edge_segments = np.concatenate(edge_segments_list, axis=0).astype(np.float32, copy=False)
+        if not trace_segments:
+            return edge_segments
+
+        simplify_epsilon = float(getattr(self.cfg, "virtual_obstacle_hfield_trace_simplify_epsilon", 0.03))
+        min_segment_length = float(getattr(self.cfg, "virtual_obstacle_hfield_trace_min_segment_length", 0.04))
+        snap_xy = getattr(self.cfg, "virtual_obstacle_hfield_trace_snap_xy", None)
+        if snap_xy is not None:
+            snap_xy = float(snap_xy)
+            if snap_xy <= 0.0:
+                snap_xy = None
+        snap_z = getattr(self.cfg, "virtual_obstacle_hfield_trace_snap_z", None)
+        if snap_z is not None:
+            snap_z = float(snap_z)
+            if snap_z <= 0.0:
+                snap_z = None
+        collinear_angle_threshold = float(
+            getattr(self.cfg, "virtual_obstacle_hfield_trace_collinear_angle_threshold", 6.0)
+        )
+        return self._trace_segments_as_graph_polylines(
+            edge_segments,
+            simplify_epsilon=simplify_epsilon,
+            min_segment_length=min_segment_length,
+            snap_xy=snap_xy,
+            snap_z=snap_z,
+            collinear_angle_threshold=collinear_angle_threshold,
+        )
 
     def _generate_virtual_obstacles_from_heightfield(self) -> bool:
         """Generate virtual obstacles directly from MuJoCo hfield data."""
         if len(self._virtual_obstacles) == 0:
             return True
 
-        configured_height_threshold = getattr(self.cfg, "virtual_obstacle_hfield_height_threshold", 0.04)
-        if configured_height_threshold is not None:
-            configured_height_threshold = float(configured_height_threshold)
-            if configured_height_threshold <= 0.0:
-                configured_height_threshold = None
-        merge_runs = bool(getattr(self.cfg, "virtual_obstacle_hfield_merge_runs", True))
-        project_to_high_side = bool(getattr(self.cfg, "virtual_obstacle_hfield_project_to_high_side", True))
+        drop_cell_diagonals = bool(
+            getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_drop_cell_diagonals", True)
+        )
+        trace_segments = bool(getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_trace_segments", True))
+        min_edge_length = float(getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_min_edge_length", 0.0))
+        cached_segments_by_angle: dict[float, np.ndarray] = {}
+        try:
+            generated_any = False
+            for name, virtual_obstacle in self._virtual_obstacles.items():
+                if not hasattr(virtual_obstacle, "generate_from_edge_segments"):
+                    hfield_surface_mesh = self._collect_hfield_surface_mesh()
+                    if hfield_surface_mesh is None:
+                        return False
+                    self._generate_virtual_obstacles(hfield_surface_mesh)
+                    del hfield_surface_mesh
+                    return True
 
-        generated_any = False
-        for name, virtual_obstacle in self._virtual_obstacles.items():
-            if not hasattr(virtual_obstacle, "generate_from_edge_segments"):
-                print(
-                    f"[WARNING] virtual obstacle '{name}' does not support heightfield source; "
-                    "falling back to mesh source."
-                )
-                return False
-
-            angle_threshold = float(getattr(virtual_obstacle, "angle_threshold", 70.0))
-            edge_segments = self._collect_hfield_edge_segments(
-                angle_threshold=angle_threshold,
-                height_threshold=configured_height_threshold,
-                merge_runs=merge_runs,
-                project_to_high_side=project_to_high_side,
-            )
-            with Timer(f"Generate virtual obstacle {name} from heightfield"):
-                virtual_obstacle.generate_from_edge_segments(edge_segments, device=self.device)
-            generated_any = True
-        return generated_any
+                angle_threshold = float(getattr(virtual_obstacle, "angle_threshold", 70.0))
+                cache_key = round(angle_threshold, 6)
+                if cache_key not in cached_segments_by_angle:
+                    cached_segments_by_angle[cache_key] = self._collect_hfield_mesh_like_edge_segments(
+                        angle_threshold=angle_threshold,
+                        drop_cell_diagonals=drop_cell_diagonals,
+                        trace_segments=trace_segments,
+                        min_edge_length=min_edge_length,
+                    )
+                edge_segments = cached_segments_by_angle[cache_key]
+                with Timer(f"Generate virtual obstacle {name} from heightfield (mesh_like)"):
+                    virtual_obstacle.generate_from_edge_segments(edge_segments, device=self.device)
+                generated_any = True
+            return generated_any
+        finally:
+            # Mesh-like extraction can allocate large temporary numpy/trimesh buffers.
+            # Release them immediately after startup generation to reduce peak memory.
+            cached_segments_by_angle.clear()
+            gc.collect()
+            if torch.cuda.is_available():
+                device_type = torch.device(self.device).type
+                if device_type == "cuda":
+                    torch.cuda.empty_cache()
 
     def _release_terrain_mesh_cache(self) -> None:
         """Release terrain mesh cache once virtual obstacles are built."""

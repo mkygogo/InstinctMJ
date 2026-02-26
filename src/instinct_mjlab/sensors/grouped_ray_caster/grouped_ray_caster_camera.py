@@ -122,12 +122,18 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         self._offset_quat: torch.Tensor | None = None
         self._offset_pos: torch.Tensor | None = None
         self._focal_length: float = 1.0
+        self._update_period_s: float = max(float(getattr(cfg, "update_period", 0.0)), 0.0)
+        self._elapsed_since_refresh: torch.Tensor = torch.empty(0)
+        self._refresh_mask: torch.Tensor = torch.empty(0, dtype=torch.bool)
 
     def __str__(self) -> str:
         """Returns: A string containing information about the instance."""
+        update_period_str = (
+            f"{self._update_period_s:.6f}" if self._update_period_s > 0.0 else "every sense()"
+        )
         return (
             f"Grouped-Ray-Caster-Camera @ '{self.cfg.name}': \n"
-            f"\tupdate period (s)    : n/a (manager driven)\n"
+            f"\tupdate period (s)    : {update_period_str}\n"
             f"\tnumber of sensors    : {self._num_envs}\n"
             f"\tnumber of rays/sensor: {self.num_rays}\n"
             f"\ttotal number of rays : {self.num_rays * self._num_envs}\n"
@@ -148,6 +154,11 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         """Frame number when the measurement took place."""
         return self._frame
 
+    @property
+    def refresh_mask(self) -> torch.Tensor:
+        """Mask of environments that refreshed in the latest sense call."""
+        return self._refresh_mask
+
     """
     Operations.
     NOTE: Since RayCasterCamera is a direct subclass of RayCaster, GroupedRayCasterCamera has to copy some of the code
@@ -160,6 +171,12 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         self._ALL_INDICES = torch.arange(self._num_envs, device=device, dtype=torch.long)
         # Create frame count buffer
         self._frame = torch.zeros(self._num_envs, device=device, dtype=torch.long)
+        # Keep per-env refresh timers (seconds).
+        self._elapsed_since_refresh = torch.zeros(self._num_envs, device=device, dtype=torch.float32)
+        self._refresh_mask = torch.ones(self._num_envs, device=device, dtype=torch.bool)
+        if self._update_period_s > 0.0:
+            # Force first sense to produce a fresh frame.
+            self._elapsed_since_refresh.fill_(self._update_period_s)
         # create buffers
         self._create_buffers()
         # compute intrinsic matrices
@@ -225,6 +242,15 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         self._camera_data.quat_w_world[env_ids] = quat_w
         # Reset the frame count
         self._frame[env_ids] = 0
+        if self._update_period_s > 0.0:
+            self._elapsed_since_refresh[env_ids] = self._update_period_s
+        self._refresh_mask[env_ids] = True
+
+    def update(self, dt: float) -> None:
+        super().update(dt)
+        if self._update_period_s <= 0.0:
+            return
+        self._elapsed_since_refresh += float(dt)
 
     def set_world_poses(
         self,
@@ -319,9 +345,22 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         env_ids = self._ALL_INDICES
         pos_w, quat_w = self._compute_camera_world_poses(env_ids)
         assert self._camera_data.pos_w is not None and self._camera_data.quat_w_world is not None
-        self._camera_data.pos_w[env_ids] = pos_w
-        self._camera_data.quat_w_world[env_ids] = quat_w
-        self._frame += 1
+        if self._update_period_s > 0.0:
+            refresh_mask = self._elapsed_since_refresh >= (self._update_period_s - 1e-8)
+            self._refresh_mask = refresh_mask
+            if torch.any(refresh_mask):
+                refresh_ids = refresh_mask.nonzero(as_tuple=False).squeeze(-1)
+                self._elapsed_since_refresh[refresh_ids] = torch.remainder(
+                    self._elapsed_since_refresh[refresh_ids], self._update_period_s
+                )
+                self._camera_data.pos_w[refresh_ids] = pos_w[refresh_ids]
+                self._camera_data.quat_w_world[refresh_ids] = quat_w[refresh_ids]
+                self._frame[refresh_ids] += 1
+        else:
+            self._refresh_mask.fill_(True)
+            self._camera_data.pos_w[env_ids] = pos_w
+            self._camera_data.quat_w_world[env_ids] = quat_w
+            self._frame += 1
 
         quat_w_expanded = quat_w.unsqueeze(1).expand(-1, self.num_rays, -1).reshape(-1, 4)
         ray_starts_flat = self.ray_starts.reshape(-1, 3)
@@ -344,6 +383,16 @@ class GroupedRayCasterCamera(GroupedRayCaster):
 
     def postprocess_rays(self) -> None:
         super().postprocess_rays()
+        stale_env_ids: torch.Tensor | None = None
+        stale_cached_outputs: dict[str, torch.Tensor] = {}
+        if self._update_period_s > 0.0:
+            stale_mask = ~self._refresh_mask
+            if torch.any(stale_mask):
+                stale_env_ids = stale_mask.nonzero(as_tuple=False).squeeze(-1)
+                assert self._camera_data.output is not None
+                for data_type in self.cfg.data_types:
+                    stale_cached_outputs[data_type] = self._camera_data.output[data_type][stale_env_ids].clone()
+
         assert self._cached_world_rays is not None
         assert self._distances is not None
         assert self._normals_w is not None
@@ -387,6 +436,10 @@ class GroupedRayCasterCamera(GroupedRayCaster):
 
         if "normals" in self.cfg.data_types:
             self._camera_data.output["normals"] = self._normals_w.view(-1, *self.image_shape, 3)
+
+        if stale_env_ids is not None:
+            for data_type, cached_output in stale_cached_outputs.items():
+                self._camera_data.output[data_type][stale_env_ids] = cached_output
 
     def debug_vis(self, visualizer: "DebugVisualizer") -> None:
         """Debug visualization for the grouped ray-caster camera.

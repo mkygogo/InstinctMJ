@@ -13,7 +13,7 @@ from mjlab.managers import SceneEntityCfg
 from instinct_mjlab.utils.math import quat_angular_velocity, quat_slerp_batch
 
 if TYPE_CHECKING:
-    from mjlab.assets import Articulation, RigidObject
+    from mjlab.entity import Entity
 
     from instinct_mjlab.motion_reference import MotionReferenceManager
 
@@ -36,7 +36,7 @@ def get_base_position_distance(
         (batch_size,) if return_diff is False
     """
     # extract useful elements
-    asset: RigidObject = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the base position of the robot
@@ -78,7 +78,7 @@ def get_base_rotation_distance(
         (batch_size,) if return_diff is False
     """
     # extract useful elements
-    asset: RigidObject = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the base rotation of the robot
@@ -116,7 +116,7 @@ def get_base_velocity_difference(
         velocity_diff: (batch_size, 3) if return_diff is True
     """
     # extract useful elements
-    asset: RigidObject = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     if anchor_frame == "world":
@@ -164,7 +164,7 @@ def get_joint_position_difference(
     masking: bool = True,
 ) -> torch.Tensor:
     # extract useful elements
-    asset: Articulation = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the joint position of the robot
@@ -190,7 +190,7 @@ def get_joint_velocity_difference(
     masking: bool = True,
 ) -> torch.Tensor:
     # extract useful elements
-    asset: Articulation = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the joint velocity of the robot
@@ -224,7 +224,7 @@ def get_link_position_distance(
     return_diff: bool = False,
 ) -> torch.Tensor:
     # extract useful elements
-    asset: Articulation = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the link position w.r.t the robot base
@@ -278,7 +278,7 @@ def get_link_rotation_distance(
     squared: bool = False,
 ) -> torch.Tensor:
     # extract useful elements
-    asset: Articulation = env.scene[asset_cfg.name]
+    asset: Entity = env.scene[asset_cfg.name]
     motion_reference: MotionReferenceManager = env.scene[reference_cfg.name]
 
     # obtain the link rotation w.r.t the robot base

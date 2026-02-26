@@ -16,6 +16,15 @@ dependencies = [
   "gymnasium>=0.29",
   "opencv-python>=4.8",
   "mediapy>=1.2.0",
+  "regex>=2024.0.0",
+  "pytorch-kinematics",
+  "scikit-learn",
+  "numpy-quaternion",
+  "onnxruntime",
+  "pandas",
+  "coacd",
+  "mjlab",
+  "instinct_rl",
 ]
 
 [project.scripts]
@@ -32,6 +41,19 @@ instinct-phalp-to-amass = "instinct_mjlab.scripts.phalp_to_amass:entry_point"
 
 [project.entry-points."mjlab.tasks"]
 instinct_mjlab = "instinct_mjlab.tasks"
+
+[tool.uv]
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[tool.uv.sources]
+mjlab = { path = "../mjlab", editable = true }
+instinct_rl = { path = "../instinct_rl", editable = true }
 
 [tool.setuptools]
 package-dir = {"" = "src"}

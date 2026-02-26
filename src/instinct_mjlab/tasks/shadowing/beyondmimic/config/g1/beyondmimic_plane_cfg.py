@@ -18,7 +18,7 @@ from mjlab.scene import SceneCfg
 from mjlab.terrains import TerrainImporterCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.utils.spec_config import CollisionCfg
-from mjlab.viewer import ViewerConfig
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig as ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
 import instinct_mjlab.tasks.shadowing.beyondmimic.beyondmimic_env_cfg as beyondmimic_cfg
@@ -86,6 +86,7 @@ def _make_amass_motion_cfg() -> AmassMotionCfgBase:
 
 def _make_motion_reference_cfg(*, debug_vis: bool) -> MotionReferenceManagerCfg:
     return MotionReferenceManagerCfg(
+        name="motion_reference",
         entity_name="robot",
         robot_model_path=G1_MJCF_PATH,
         reference_entity_name="robot_reference" if debug_vis else None,
@@ -132,13 +133,20 @@ def _make_scene_cfg(*, play: bool, motion_reference_cfg: MotionReferenceManagerC
             ),
         )
 
+    entities = beyondmimic_cfg.make_beyondmimic_scene_entities(
+        robot=deepcopy(G1_CFG),
+        robot_reference=robot_reference,
+    )
+    sensors = beyondmimic_cfg.make_beyondmimic_scene_sensors(
+        motion_reference=motion_reference_cfg,
+    )
+
     return beyondmimic_cfg.BeyondMimicSceneCfg(
         num_envs=1 if play else 4096,
         env_spacing=2.5 if play else 4.0,
         terrain=TerrainImporterCfg(terrain_type="plane"),
-        robot=deepcopy(G1_CFG),
-        robot_reference=robot_reference,
-        motion_reference=motion_reference_cfg,
+        entities=entities,
+        sensors=sensors,
     )
 
 
@@ -649,9 +657,10 @@ def _apply_play_overrides(cfg: InstinctLabRLEnvCfg, motion_reference_cfg: Motion
             term.params["print_reason"] = True
 
     # enable debug_vis option in commands
-    for cmd in cfg.commands.values():
-        if hasattr(cmd, "debug_vis"):
-            cmd.debug_vis = True
+    cfg.commands["position_ref_command"].debug_vis = True
+    cfg.commands["rotation_ref_command"].debug_vis = True
+    cfg.commands["joint_pos_ref_command"].debug_vis = True
+    cfg.commands["joint_vel_ref_command"].debug_vis = True
 
 
 def _build_run_name(cfg: InstinctLabRLEnvCfg) -> str:

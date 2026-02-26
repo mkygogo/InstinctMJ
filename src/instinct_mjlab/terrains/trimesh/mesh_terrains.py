@@ -19,7 +19,7 @@ import coacd
 # STL is only decomposed once even when the terrain generator creates many tiles.
 _COACD_PARTS_CACHE: dict[tuple, list[tuple[np.ndarray, np.ndarray]]] = {}
 _COACD_PREWARM_DONE: set[tuple] = set()
-_COACD_CACHE_VERSION = 2
+_COACD_CACHE_VERSION = 3
 _COACD_LOG_LEVEL_SET: str | None = None
 
 # In-memory cache for hfield height arrays keyed by (abspath, st_size, st_mtime_ns, resolution, size_x, size_y).
@@ -265,6 +265,121 @@ def _load_motion_matched_terrain_mesh(
     return terrain_mesh, border_height
 
 
+def _sanitize_coacd_parts(
+    parts_arrays: list[tuple[np.ndarray, np.ndarray]],
+    *,
+    terrain_tag: str,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Drop degenerate CoACD parts that can trigger MuJoCo qhull failures."""
+    sanitized: list[tuple[np.ndarray, np.ndarray]] = []
+    skipped_parts = 0
+    total_parts = len(parts_arrays)
+
+    for part_verts, part_faces in parts_arrays:
+        verts = np.asarray(part_verts, dtype=np.float64)
+        faces = np.asarray(part_faces, dtype=np.int64)
+
+        if verts.ndim != 2 or verts.shape[1] != 3:
+            skipped_parts += 1
+            continue
+        if faces.ndim != 2 or faces.shape[1] != 3:
+            skipped_parts += 1
+            continue
+        if verts.shape[0] < 4 or faces.shape[0] < 4:
+            skipped_parts += 1
+            continue
+
+        valid_faces = np.logical_and(faces >= 0, faces < verts.shape[0]).all(axis=1)
+        if not np.any(valid_faces):
+            skipped_parts += 1
+            continue
+        faces = faces[valid_faces]
+
+        used_vertex_ids = np.unique(faces.reshape(-1))
+        if used_vertex_ids.size < 4:
+            skipped_parts += 1
+            continue
+
+        remap = np.full(verts.shape[0], -1, dtype=np.int64)
+        remap[used_vertex_ids] = np.arange(used_vertex_ids.size, dtype=np.int64)
+        verts = verts[used_vertex_ids]
+        faces = remap[faces]
+
+        # Drop duplicated triangles (ignore winding for the duplicate check).
+        sorted_faces = np.sort(faces, axis=1)
+        _, unique_face_indices = np.unique(sorted_faces, axis=0, return_index=True)
+        faces = faces[np.sort(unique_face_indices)]
+        if faces.shape[0] < 4:
+            skipped_parts += 1
+            continue
+
+        # Reject near-planar/near-line hulls that are not valid 3D collision meshes.
+        centered = verts - np.mean(verts, axis=0, keepdims=True)
+        _, singular_values, _ = np.linalg.svd(centered, full_matrices=False)
+        if singular_values.shape[0] < 3:
+            skipped_parts += 1
+            continue
+        largest_sv = max(float(singular_values[0]), 1.0e-12)
+        smallest_sv = float(singular_values[-1])
+        if smallest_sv / largest_sv < 1.0e-8:
+            skipped_parts += 1
+            continue
+        extents = np.ptp(verts, axis=0)
+        if float(np.min(extents)) < 1.0e-7:
+            skipped_parts += 1
+            continue
+
+        sanitized.append((verts.astype(np.float32), faces.astype(np.int32)))
+
+    if len(sanitized) == 0:
+        raise ValueError(
+            "[TerrainImporter] CoACD produced no valid 3D hulls for "
+            f"{terrain_tag}. Try increasing collision_coacd_threshold."
+        )
+    if skipped_parts > 0:
+        print(
+            f"[TerrainImporter] Skip {skipped_parts}/{total_parts} degenerate "
+            f"CoACD hull(s) for {terrain_tag}."
+        )
+    return sanitized
+
+
+def _adapt_coacd_kwargs_for_mesh(
+    coacd_kwargs: dict,
+    terrain_mesh: trimesh.Trimesh,
+) -> dict:
+    """Adapt CoACD quality parameters from mesh complexity."""
+    adapted_kwargs = dict(coacd_kwargs)
+
+    face_count = int(np.asarray(terrain_mesh.faces).shape[0])
+    bounds = np.asarray(terrain_mesh.bounds, dtype=np.float64)
+    extents = np.maximum(bounds[1] - bounds[0], 1.0e-9)
+    xy_extent = float(max(extents[0], extents[1]))
+    z_extent = float(extents[2])
+    relief_ratio = z_extent / max(xy_extent, 1.0e-9)
+
+    detail_gain = 1.0
+    if face_count <= 120_000:
+        detail_gain *= 1.35
+    elif face_count <= 260_000:
+        detail_gain *= 1.22
+    elif face_count <= 520_000:
+        detail_gain *= 1.12
+    if relief_ratio >= 0.08:
+        detail_gain *= 1.12
+    elif relief_ratio <= 0.02:
+        detail_gain *= 0.96
+
+    threshold = float(adapted_kwargs["threshold"]) / detail_gain
+    resolution = int(round(float(adapted_kwargs["resolution"]) * detail_gain))
+    mcts_iterations = int(round(float(adapted_kwargs["mcts_iterations"]) * min(detail_gain, 1.2)))
+
+    adapted_kwargs["threshold"] = float(np.clip(threshold, 0.015, 0.08))
+    adapted_kwargs["resolution"] = int(np.clip(resolution, 1200, 5000))
+    adapted_kwargs["mcts_iterations"] = int(np.clip(mcts_iterations, 80, 280))
+    return adapted_kwargs
+
+
 def _run_coacd_decomposition(
     terrain_mesh: trimesh.Trimesh,
     coacd_kwargs: dict,
@@ -279,20 +394,23 @@ def _run_coacd_decomposition(
         vertices=np.asarray(terrain_mesh.vertices, dtype=np.float64),
         indices=np.asarray(terrain_mesh.faces, dtype=np.int32),
     )
+    adaptive_coacd_kwargs = _adapt_coacd_kwargs_for_mesh(coacd_kwargs, terrain_mesh)
 
     if verbose:
         print(
             f"[TerrainImporter] CoACD start: {terrain_tag}, "
-            f"th={coacd_kwargs['threshold']}, "
-            f"max_hull={coacd_kwargs['max_convex_hull']}, "
-            f"merge={coacd_kwargs['merge']}, "
-            f"apx={coacd_kwargs['apx_mode']}."
+            f"th={adaptive_coacd_kwargs['threshold']}, "
+            f"res={adaptive_coacd_kwargs['resolution']}, "
+            f"iter={adaptive_coacd_kwargs['mcts_iterations']}, "
+            f"max_hull={adaptive_coacd_kwargs['max_convex_hull']}, "
+            f"merge={adaptive_coacd_kwargs['merge']}, "
+            f"apx={adaptive_coacd_kwargs['apx_mode']}."
         )
 
     # Run CoACD convex decomposition.
     raw_parts = coacd.run_coacd(
         coacd_mesh,
-        **coacd_kwargs,
+        **adaptive_coacd_kwargs,
     )
 
     # Store numpy arrays in cache (not raw CoACD objects)
@@ -300,6 +418,7 @@ def _run_coacd_decomposition(
         (np.asarray(v, dtype=np.float32), np.asarray(f, dtype=np.int32))
         for v, f in raw_parts
     ]
+    parts_arrays = _sanitize_coacd_parts(parts_arrays, terrain_tag=terrain_tag)
     if verbose:
         print(f"[TerrainImporter] CoACD done: {terrain_tag}, hulls={len(parts_arrays)}.")
     return parts_arrays
@@ -627,6 +746,7 @@ def _add_collision_coacd(
     cache_key = _coacd_cache_key(cfg, terrain_abspath)
     cache_path = _coacd_cache_path(cfg, terrain_abspath, cache_key)
     coacd_kwargs = _coacd_run_kwargs(cfg)
+    loaded_from_disk_cache = False
 
     cached_parts = _COACD_PARTS_CACHE.get(cache_key)
     if cached_parts is not None:
@@ -635,6 +755,7 @@ def _add_collision_coacd(
         parts_arrays = None
         if cfg.collision_coacd_use_disk_cache and os.path.exists(cache_path):
             parts_arrays = _load_coacd_parts_from_disk(cache_path)
+            loaded_from_disk_cache = True
 
         if parts_arrays is None:
             parts_arrays = _run_coacd_decomposition(
@@ -646,6 +767,15 @@ def _add_collision_coacd(
             )
             if cfg.collision_coacd_use_disk_cache:
                 _save_coacd_parts_to_disk(cache_path, parts_arrays)
+        else:
+            original_num_parts = len(parts_arrays)
+            parts_arrays = _sanitize_coacd_parts(
+                parts_arrays,
+                terrain_tag=f"terrain_idx={terrain_idx} (disk-cache)",
+            )
+            if cfg.collision_coacd_use_disk_cache and loaded_from_disk_cache:
+                if len(parts_arrays) != original_num_parts:
+                    _save_coacd_parts_to_disk(cache_path, parts_arrays)
         _COACD_PARTS_CACHE[cache_key] = parts_arrays
 
     auto_align_z = 0.0
@@ -657,6 +787,25 @@ def _add_collision_coacd(
         )
 
     collision_z = float(cfg.collision_coacd_z_offset) + auto_align_z
+
+    use_default_hull_appearance = bool(cfg.collision_coacd_visualize_collision_hulls)
+    if use_default_hull_appearance:
+        hull_geom_group = 2
+        hull_geom_rgba = None
+    else:
+        hull_geom_group = int(cfg.collision_coacd_collision_geom_group)
+        hull_geom_rgba = tuple(float(v) for v in cfg.collision_coacd_collision_geom_rgba)
+    if not 0 <= hull_geom_group <= 5:
+        raise ValueError(
+            "collision_coacd_collision_geom_group must be in [0, 5]. "
+            f"Got: {hull_geom_group}"
+        )
+    if hull_geom_rgba is not None:
+        if len(hull_geom_rgba) != 4:
+            raise ValueError(
+                "collision_coacd_collision_geom_rgba must have 4 elements "
+                f"(r, g, b, a). Got: {hull_geom_rgba}"
+            )
 
     geometries: list[TerrainGeometry] = []
     for part_idx, (part_verts, part_faces) in enumerate(parts_arrays):
@@ -671,8 +820,9 @@ def _add_collision_coacd(
             meshname=hull_mesh_name,
             pos=(0.0, 0.0, collision_z),
         )
-        hull_geom.group = 3
-        hull_geom.rgba[:] = (0.0, 0.0, 0.0, 0.0)
+        hull_geom.group = hull_geom_group
+        if hull_geom_rgba is not None:
+            hull_geom.rgba[:] = hull_geom_rgba
         hull_geom.margin = float(cfg.collision_coacd_geom_margin)
         hull_geom.gap = 0.0
         geometries.append(TerrainGeometry(geom=hull_geom))
@@ -1402,20 +1552,27 @@ def motion_matched_terrain(
     )
     origin = np.array([cfg.size[0] / 2, cfg.size[1] / 2, -border_height])
 
-    # Encode terrain index in mesh name so runtime can recover terrain-to-origin mapping
-    # without relying on custom terrain importer compatibility fields.
-    mesh_name = f"motion_matched_t{terrain_idx}_{uuid.uuid4().hex}"
-    spec.add_mesh(
-        name=mesh_name,
-        uservert=np.asarray(terrain_mesh.vertices, dtype=np.float32).reshape(-1).tolist(),
-        userface=np.asarray(terrain_mesh.faces, dtype=np.int32).reshape(-1).tolist(),
+    skip_source_mesh_import = bool(cfg.collision_coacd) and (
+        bool(cfg.collision_coacd_hide_source_visual_mesh)
+        or bool(cfg.collision_coacd_visualize_collision_hulls)
     )
-    geom = spec.body("terrain").add_geom(
-        type=mujoco.mjtGeom.mjGEOM_MESH,
-        meshname=mesh_name,
-        pos=(0.0, 0.0, 0.0),
-    )
-    geometries = [TerrainGeometry(geom=geom)]
+    geometries: list[TerrainGeometry] = []
+    geom = None
+    if not skip_source_mesh_import:
+        # Encode terrain index in mesh name so runtime can recover terrain-to-origin mapping
+        # without relying on custom terrain importer compatibility fields.
+        mesh_name = f"motion_matched_t{terrain_idx}_{uuid.uuid4().hex}"
+        spec.add_mesh(
+            name=mesh_name,
+            uservert=np.asarray(terrain_mesh.vertices, dtype=np.float32).reshape(-1).tolist(),
+            userface=np.asarray(terrain_mesh.faces, dtype=np.int32).reshape(-1).tolist(),
+        )
+        geom = spec.body("terrain").add_geom(
+            type=mujoco.mjtGeom.mjGEOM_MESH,
+            meshname=mesh_name,
+            pos=(0.0, 0.0, 0.0),
+        )
+        geometries.append(TerrainGeometry(geom=geom))
     enabled_modes = sum([
         bool(cfg.face_box_collision),
         bool(cfg.collision_hfield),
@@ -1431,9 +1588,23 @@ def motion_matched_terrain(
         # Root cause: MuJoCo's polyhedral mesh collision treats the interior of any closed
         # mesh as solid, reporting negative-dist contacts for objects near the inner surface.
         # CoACD decomposes the concave mesh into approximate convex hulls for correct collision.
-        geom.contype = 0
-        geom.conaffinity = 0
-        geom.group = 2
+        if geom is not None:
+            geom.contype = 0
+            geom.conaffinity = 0
+            if bool(cfg.collision_coacd_visualize_collision_hulls):
+                # Visualization mode: hide source mesh, render CoACD hulls.
+                geom.group = 4
+                geom.rgba[:] = (0.0, 0.0, 0.0, 0.0)
+            else:
+                source_geom_group = int(cfg.collision_coacd_source_visual_geom_group)
+                if not 0 <= source_geom_group <= 5:
+                    raise ValueError(
+                        "collision_coacd_source_visual_geom_group must be in [0, 5]. "
+                        f"Got: {source_geom_group}"
+                    )
+                geom.group = source_geom_group
+                if bool(cfg.collision_coacd_hide_source_visual_mesh):
+                    geom.rgba[:] = (0.0, 0.0, 0.0, 0.0)
         geometries.extend(
             _add_collision_coacd(cfg, spec, terrain_mesh, terrain_idx, terrain_abspath)
         )

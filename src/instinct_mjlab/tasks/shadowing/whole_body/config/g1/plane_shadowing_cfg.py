@@ -26,7 +26,7 @@ from mjlab.tasks.tracking import mdp as tracking_mdp
 from mjlab.terrains import TerrainImporterCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg
-from mjlab.viewer import ViewerConfig
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig as ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
 from instinct_mjlab.assets.unitree_g1 import (
@@ -286,6 +286,7 @@ _G1_URDF_PATH = os.path.join(
 
 def _make_motion_reference_cfg(*, debug_vis: bool) -> MotionReferenceManagerCfg:
     return MotionReferenceManagerCfg(
+        name="motion_reference",
         entity_name="robot",
         robot_model_path=_G1_URDF_PATH,
         reference_entity_name="robot_reference" if debug_vis else None,
@@ -947,9 +948,11 @@ def _apply_play_overrides(cfg: InstinctLabRLEnvCfg, motion_reference_cfg: Motion
     #         self.terminations.__dict__[term_name] = None
 
     # enable debug_vis option in commands
-    for cmd in cfg.commands.values():
-        if hasattr(cmd, "debug_vis"):
-            cmd.debug_vis = True
+    cfg.commands["position_ref_command"].debug_vis = True
+    cfg.commands["position_b_ref_command"].debug_vis = True
+    cfg.commands["rotation_ref_command"].debug_vis = True
+    cfg.commands["joint_pos_ref_command"].debug_vis = True
+    cfg.commands["joint_vel_ref_command"].debug_vis = True
 
     # add PLAY-specific monitor term
     # self.monitors.shoulder_actuator = MonitorTermCfg(

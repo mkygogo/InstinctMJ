@@ -14,7 +14,6 @@ import cv2
 from sklearn.cluster import DBSCAN
 
 from mjlab.utils.lab_api import math as math_utils
-from instinct_mjlab.visualization.markers import VisualizationMarkers
 from instinct_mjlab.utils.warp import convert_to_warp_mesh, raycast_mesh
 
 from instinct_mjlab.utils.warp.cylinder import CylinderSpatialGrid
@@ -115,45 +114,10 @@ class EdgeCylinder(VirtualObstacleBase):
         self._set_edge_cylinders(edge_end_points, device=device)
 
     def disable_visualizer(self):
-        if hasattr(self, "_cylinder_visualizer"):
-            self._cylinder_visualizer.set_visibility(False)
+        return
 
     def visualize(self):
-        if self.edges_pyt.numel() == 0:
-            return
-
-        if not hasattr(self, "_cylinder_visualizer"):
-            self._cylinder_visualizer = VisualizationMarkers(self.cfg.visualizer)
-            self._cylinder_rotate_y_90 = math_utils.quat_from_angle_axis(
-                angle=torch.tensor([np.pi / 2], device=self.device),
-                axis=torch.tensor([[0.0, 1.0, 0.0]], device=self.device),
-            )  # shape (1, 4)
-
-        trans = (self.edges_pyt[:, :3] + self.edges_pyt[:, 3:6]) / 2
-        # compute the direction quaternion
-        direction = self.edges_pyt[:, 3:6] - self.edges_pyt[:, :3]
-        default_direction = torch.zeros_like(direction)
-        default_direction[:, 0] = 1.0
-        normalized_direction = direction / torch.norm(direction, dim=-1, keepdim=True)  # arrow-direction
-        axis = torch.cross(default_direction, normalized_direction, dim=-1)
-        dot_prod_ = torch.sum(default_direction * normalized_direction, dim=-1)
-        angle = torch.acos(torch.clamp(dot_prod_, -1.0, 1.0))
-        quat = math_utils.quat_from_angle_axis(
-            angle,
-            axis,
-        )
-        quat = math_utils.quat_mul(quat, self._cylinder_rotate_y_90.expand(quat.shape[0], -1))
-        # compute the scale to match the length and the edge thickness.
-        scales = torch.ones(len(self.edges_pyt), 3, device=self.device)
-        scales[:, 0] = self.cfg.cylinder_radius
-        scales[:, 1] = self.cfg.cylinder_radius
-        scales[:, 2] = torch.norm(direction, dim=-1)
-        self._cylinder_visualizer.visualize(
-            translations=trans,
-            orientations=quat,
-            scales=scales,
-        )
-        self._cylinder_visualizer.set_visibility(True)
+        return
 
     def get_points_penetration_offset(self, points):
         return (
@@ -337,6 +301,115 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
         self.cfg: GreedyconcatEdgeCylinderCfg = cfg
         self.angle_threshold = cfg.angle_threshold
 
+    @staticmethod
+    def _try_merge_collinear_pair(
+        seg_a: np.ndarray,
+        seg_b: np.ndarray,
+        *,
+        cos_threshold: float,
+        gap_threshold: float,
+        line_distance_threshold: float,
+    ) -> np.ndarray | None:
+        """Try to merge two near-collinear segments with a small gap."""
+        a0, a1 = seg_a[:3], seg_a[3:]
+        b0, b1 = seg_b[:3], seg_b[3:]
+        dir_a = a1 - a0
+        dir_b = b1 - b0
+        len_a = np.linalg.norm(dir_a)
+        len_b = np.linalg.norm(dir_b)
+        if len_a <= 1.0e-8 or len_b <= 1.0e-8:
+            return None
+
+        unit_a = dir_a / len_a
+        unit_b = dir_b / len_b
+        if abs(float(np.dot(unit_a, unit_b))) < cos_threshold:
+            return None
+
+        dist_b0 = np.linalg.norm(np.cross(b0 - a0, unit_a))
+        dist_b1 = np.linalg.norm(np.cross(b1 - a0, unit_a))
+        dist_a0 = np.linalg.norm(np.cross(a0 - b0, unit_b))
+        dist_a1 = np.linalg.norm(np.cross(a1 - b0, unit_b))
+        if max(dist_b0, dist_b1, dist_a0, dist_a1) > line_distance_threshold:
+            return None
+
+        a_min, a_max = 0.0, len_a
+        b_t0 = float(np.dot(b0 - a0, unit_a))
+        b_t1 = float(np.dot(b1 - a0, unit_a))
+        b_min, b_max = min(b_t0, b_t1), max(b_t0, b_t1)
+        projected_gap = max(b_min - a_max, a_min - b_max, 0.0)
+        if projected_gap > gap_threshold:
+            return None
+
+        merged_min = min(a_min, b_min)
+        merged_max = max(a_max, b_max)
+        merged_start = a0 + merged_min * unit_a
+        merged_end = a0 + merged_max * unit_a
+        if np.linalg.norm(merged_end - merged_start) <= 1.0e-8:
+            return None
+        return np.concatenate([merged_start, merged_end]).astype(np.float32)
+
+    def _post_merge_collinear_segments(self, segments: np.ndarray) -> np.ndarray:
+        """Merge fragmented collinear segments separated by small endpoint gaps."""
+        gap_threshold = float(getattr(self.cfg, "merge_collinear_gap", 0.0))
+        if gap_threshold <= 0.0 or segments.shape[0] <= 1:
+            return segments
+        max_segments = int(getattr(self.cfg, "merge_collinear_max_segments", 4000))
+        if segments.shape[0] > max_segments:
+            # Safety valve: keep startup/runtime bounded on dense terrain edge sets.
+            return segments
+
+        angle_threshold = float(
+            getattr(self.cfg, "merge_collinear_angle_threshold", self.cfg.adjacent_angle_threshold)
+        )
+        cos_threshold = np.cos(np.deg2rad(angle_threshold))
+
+        line_distance_threshold = getattr(self.cfg, "merge_collinear_line_distance", None)
+        if line_distance_threshold is None:
+            line_distance_threshold = float(self.cfg.point_distance_threshold)
+        else:
+            line_distance_threshold = float(line_distance_threshold)
+
+        max_passes = max(int(getattr(self.cfg, "merge_collinear_max_passes", 3)), 1)
+        active_segments = [seg.astype(np.float64, copy=False) for seg in segments]
+        for _ in range(max_passes):
+            used = [False] * len(active_segments)
+            merged_segments: list[np.ndarray] = []
+            changed = False
+            for i, base_seg in enumerate(active_segments):
+                if used[i]:
+                    continue
+                current_seg = base_seg.astype(np.float32, copy=False)
+                used[i] = True
+
+                keep_merging = True
+                while keep_merging:
+                    keep_merging = False
+                    for j, candidate in enumerate(active_segments):
+                        if used[j]:
+                            continue
+                        merged = self._try_merge_collinear_pair(
+                            current_seg,
+                            candidate.astype(np.float32, copy=False),
+                            cos_threshold=cos_threshold,
+                            gap_threshold=gap_threshold,
+                            line_distance_threshold=line_distance_threshold,
+                        )
+                        if merged is None:
+                            continue
+                        current_seg = merged
+                        used[j] = True
+                        changed = True
+                        keep_merging = True
+                merged_segments.append(current_seg.astype(np.float64, copy=False))
+
+            active_segments = merged_segments
+            if not changed:
+                break
+
+        if len(active_segments) == 0:
+            return np.empty((0, 6), dtype=np.float32)
+        return np.asarray(active_segments, dtype=np.float32).reshape(-1, 6)
+
     def process_edges(self, edge_coords: np.ndarray) -> np.ndarray:
         line_pts = edge_coords.reshape(-1, 3)
         V, inv_idx = np.unique(line_pts, axis=0, return_inverse=True)
@@ -429,13 +502,16 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
             while len(v_set) >= self.cfg.min_points:
                 for i in range(len(v_set) - 1):
                     max_vi, max_dist = compute_max_distance_to_line_vec(V, v_set[i:])
-                    if max_dist < 0.05:
+                    if max_dist < self.cfg.point_distance_threshold:
                         break
                 if len(v_set) - i >= self.cfg.min_points:
                     processed_edge_coords.append(np.concatenate([V[v_set[i]], V[v_set[-1]]]))
                 v_set = v_set[: i + 1]
 
-        return np.array(processed_edge_coords, dtype=np.float32)
+        if len(processed_edge_coords) == 0:
+            return np.empty((0, 6), dtype=np.float32)
+        processed = np.asarray(processed_edge_coords, dtype=np.float32).reshape(-1, 6)
+        return self._post_merge_collinear_segments(processed)
 
 
 class RayEdgeCylinder(VirtualObstacleBase):
@@ -627,58 +703,10 @@ class RayEdgeCylinder(VirtualObstacleBase):
             self.cylinders = None
 
     def disable_visualizer(self):
-        if hasattr(self, "_cylinder_visualizer"):
-            self._cylinder_visualizer.set_visibility(False)
-        if hasattr(self, "_points_visualizer"):
-            self._points_visualizer.set_visibility(False)
+        return
 
     def visualize(self):
-        if self.edges_pyt.numel() == 0:
-            return
-
-        if not hasattr(self, "_cylinder_visualizer"):
-            self._cylinder_visualizer = VisualizationMarkers(self.cfg.visualizer)
-            self._cylinder_rotate_y_90 = math_utils.quat_from_angle_axis(
-                angle=torch.tensor([np.pi / 2], device=self.device),
-                axis=torch.tensor([[0.0, 1.0, 0.0]], device=self.device),
-            )  # shape (1, 4)
-
-        trans = (self.edges_pyt[:, :3] + self.edges_pyt[:, 3:6]) / 2
-        # compute the direction quaternion
-        direction = self.edges_pyt[:, 3:6] - self.edges_pyt[:, :3]
-        default_direction = torch.zeros_like(direction)
-        default_direction[:, 0] = 1.0
-        normalized_direction = direction / torch.norm(direction, dim=-1, keepdim=True)  # arrow-direction
-        axis = torch.cross(default_direction, normalized_direction, dim=-1)
-        dot_prod_ = torch.sum(default_direction * normalized_direction, dim=-1)
-        angle = torch.acos(torch.clamp(dot_prod_, -1.0, 1.0))
-        quat = math_utils.quat_from_angle_axis(
-            angle,
-            axis,
-        )
-        quat = math_utils.quat_mul(quat, self._cylinder_rotate_y_90.expand(quat.shape[0], -1))
-        # compute the scale to match the length and the edge thickness.
-        scales = torch.ones(len(self.edges_pyt), 3, device=self.device)
-        scales[:, 0] = self.cfg.cylinder_radius
-        scales[:, 1] = self.cfg.cylinder_radius
-        scales[:, 2] = torch.norm(direction, dim=-1)
-        self._cylinder_visualizer.visualize(
-            translations=trans,
-            orientations=quat,
-            scales=scales,
-        )
-
-        if self.points_list.numel() == 0:
-            return
-
-        if not hasattr(self, "_points_visualizer"):
-            self._points_visualizer = VisualizationMarkers(self.cfg.points_visualizer)
-
-        self._points_visualizer.visualize(
-            translations=self.points_list,
-        )
-        self._cylinder_visualizer.set_visibility(True)
-        self._points_visualizer.set_visibility(True)
+        return
 
     def get_points_penetration_offset(self, points):
         return (

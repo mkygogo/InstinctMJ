@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from typing import Literal
 
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
 from mjlab.sensor import PinholeCameraPatternCfg
 
 from .grouped_ray_caster_camera import GroupedRayCasterCamera
@@ -41,6 +41,13 @@ class GroupedRayCasterCameraCfg(GroupedRayCasterCfg):
 
     data_types: list[str] = field(default_factory=lambda: ["distance_to_image_plane"])
     """List of sensor names/types to enable for the camera. Defaults to ["distance_to_image_plane"]."""
+
+    update_period: float = 0.0
+    """Camera refresh period in seconds.
+
+    - ``<= 0``: refresh on every ``sim.sense()`` call.
+    - ``> 0``: refresh at most once every ``update_period`` seconds.
+    """
 
     depth_clipping_behavior: Literal["max", "zero", "none"] = "none"
     """Clipping behavior for the camera for values exceed the maximum value. Defaults to "none".

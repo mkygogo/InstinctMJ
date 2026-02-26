@@ -18,8 +18,6 @@ _TRACKING_MOTION_REQUIRED_KEYS = (
 
 
 _DEFAULT_DATASET_CANDIDATES = (
-  "~/Xyk/datasets",
-  "~/Xyk/Datasets",
   "~/Datasets",
 )
 
@@ -36,7 +34,7 @@ def resolve_datasets_root() -> Path:
       return candidate_path.resolve()
 
   # Keep a deterministic fallback even when no candidate exists yet.
-  return Path(_DEFAULT_DATASET_CANDIDATES[1]).expanduser().resolve()
+  return Path(_DEFAULT_DATASET_CANDIDATES[0]).expanduser().resolve()
 
 
 def _tracking_motion_missing_keys(motion_path: Path) -> tuple[str, ...]:

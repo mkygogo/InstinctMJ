@@ -9,7 +9,7 @@ from mjlab.managers import ManagerTermBase, ManagerTermBaseCfg, SceneEntityCfg
 from mjlab.sensor import ContactSensor
 
 if TYPE_CHECKING:
-    from mjlab.assets import RigidObject
+    from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedRLEnv
 
     from instinct_mjlab.motion_reference import MotionReferenceManager
@@ -70,7 +70,7 @@ def terrain_out_of_bounds(
         map_height = n_cols * grid_length + 2 * border_width
 
         # extract the used quantities (to enable type-hinting)
-        asset: RigidObject = env.scene[asset_cfg.name]
+        asset: Entity = env.scene[asset_cfg.name]
 
         # check if the agent is out of bounds
         x_out_of_bounds = torch.abs(asset.data.root_link_pos_w[:, 0]) > 0.5 * map_width - distance_buffer

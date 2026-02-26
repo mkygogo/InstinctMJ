@@ -24,18 +24,49 @@ class TerrainImporterCfg(TerrainImporterCfgBase):
     - ``"heightfield"``: Extract obstacle edges directly from MuJoCo hfield data.
     """
 
-    virtual_obstacle_hfield_height_threshold: float | None = 0.04
-    """Absolute height-difference threshold (meters) used by hfield edge extraction.
+    virtual_obstacle_hfield_method: Literal["mesh_like"] = "mesh_like"
+    """Heightfield virtual-obstacle extraction method.
 
-    If set to ``None``, the extractor falls back to angle-based conversion:
-    ``tan(angle_threshold) * hfield_cell_size``.
+    - ``"mesh_like"``: Reconstruct hfield surface mesh then run mesh-style obstacle extraction.
     """
 
-    virtual_obstacle_hfield_merge_runs: bool = True
-    """Whether to merge contiguous hfield edge intervals into long line segments."""
+    virtual_obstacle_hfield_trace_simplify_epsilon: float = 0.03
+    """Polyline simplification tolerance (meters) for mesh-like edge tracing."""
 
-    virtual_obstacle_hfield_project_to_high_side: bool = True
-    """Whether to project hfield edge segments to the higher side (convex crest side)."""
+    virtual_obstacle_hfield_trace_min_segment_length: float = 0.04
+    """Minimum segment length (meters) kept after mesh-like edge tracing."""
+
+    virtual_obstacle_hfield_trace_snap_xy: float | None = None
+    """XY snap size (meters) for graph nodes in mesh-like edge tracing.
+
+    If None, a value is estimated from primitive hfield edge spacing.
+    """
+
+    virtual_obstacle_hfield_trace_snap_z: float | None = None
+    """Z snap size (meters) for graph nodes in mesh-like edge tracing.
+
+    This prevents edges at different heights from being merged into one node.
+    If None, a value is estimated from edge segment distribution.
+    """
+
+    virtual_obstacle_hfield_trace_collinear_angle_threshold: float = 6.0
+    """Angle threshold (degrees) for collinear simplification during tracing.
+
+    Smaller values preserve corners more aggressively.
+    """
+
+    virtual_obstacle_hfield_mesh_like_drop_cell_diagonals: bool = True
+    """Whether ``mesh_like`` should ignore intra-cell diagonal sharp edges.
+
+    These edges are triangulation artifacts from hfield quads and can create
+    fragmented virtual-obstacle segments.
+    """
+
+    virtual_obstacle_hfield_mesh_like_trace_segments: bool = True
+    """Whether ``mesh_like`` sharp-edge segments should be graph-traced/merged."""
+
+    virtual_obstacle_hfield_mesh_like_min_edge_length: float = 0.0
+    """Minimum raw sharp-edge length (meters) kept in ``mesh_like`` before tracing."""
 
     collision_debug_vis: bool = False
     """Whether to visualize terrain collision geoms by tinting them in purple."""

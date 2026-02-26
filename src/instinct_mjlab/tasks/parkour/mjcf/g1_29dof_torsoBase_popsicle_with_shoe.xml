@@ -44,7 +44,7 @@
     <mesh name="right_rubber_hand" file="right_rubber_hand.STL" />
   </asset>
   <worldbody>
-    <body name="torso_link">
+    <body name="torso_link" pos="0 0 0.9">
       <inertial pos="0.000931 0.000346 0.15082" quat="0.99965 -0.000442591 0.0264193 0.00143178" mass="6.78" diaginertia="0.0591438 0.0470139 0.0255583" />
       <joint name="floating_base_joint" type="free" />
       <geom type="mesh" mesh="torso_link" material="silver" contype="0" conaffinity="0" density="0" group="2" />
@@ -95,13 +95,13 @@
                         <inertial pos="0.026505 0 -0.016425" quat="-0.000481092 0.728482 -0.000618967 0.685065" mass="0.608" diaginertia="0.00167218 0.0016161 0.000217621" />
                         <joint name="left_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.2618 0.2618" actuatorfrcrange="-50 50" />
                         <geom type="mesh" mesh="left_ankle_roll_link" material="black" contype="0" conaffinity="0" density="0" group="2" />
-                        <geom size="0.01 0.025" pos="0.075 -0.026 -0.048" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.008 0.0835" pos="0.0395 -0.018 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.091" pos="0.039 -0.01 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.093" pos="0.039 0 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.091" pos="0.039 0.01 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.008 0.0835" pos="0.0395 0.018 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.025" pos="0.075 0.026 -0.048" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
+                        <geom name="left_foot1_collision" size="0.01 0.025" pos="0.075 -0.026 -0.048" quat="0.707105 0 0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot2_collision" size="0.008 0.0835" pos="0.0395 -0.018 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot3_collision" size="0.01 0.091" pos="0.039 -0.01 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot4_collision" size="0.01 0.093" pos="0.039 0 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot5_collision" size="0.01 0.091" pos="0.039 0.01 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot6_collision" size="0.008 0.0835" pos="0.0395 0.018 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="left_foot7_collision" size="0.01 0.025" pos="0.075 0.026 -0.048" quat="0.707105 0 0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
                         <body name="LL_FOOT" pos="0.04 0 -0.037">
                           <inertial pos="0 0 0" mass="1e-09" diaginertia="0 0 0" />
                         </body>
@@ -138,13 +138,13 @@
                         <inertial pos="0.026505 0 -0.016425" quat="0.000481092 0.728482 0.000618967 0.685065" mass="0.608" diaginertia="0.00167218 0.0016161 0.000217621" />
                         <joint name="right_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.2618 0.2618" actuatorfrcrange="-50 50" />
                         <geom type="mesh" mesh="right_ankle_roll_link" material="black" contype="0" conaffinity="0" density="0" group="2" />
-                        <geom size="0.01 0.025" pos="0.075 -0.026 -0.048" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.008 0.0835" pos="0.0395 -0.018 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.091" pos="0.039 -0.01 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.093" pos="0.039 0 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.091" pos="0.039 0.01 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.008 0.0835" pos="0.0395 0.018 -0.048" quat="0.707105 0 -0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
-                        <geom size="0.01 0.025" pos="0.075 0.026 -0.048" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
+                        <geom name="right_foot1_collision" size="0.01 0.025" pos="0.075 -0.026 -0.048" quat="0.707105 0 0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot2_collision" size="0.008 0.0835" pos="0.0395 -0.018 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot3_collision" size="0.01 0.091" pos="0.039 -0.01 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot4_collision" size="0.01 0.093" pos="0.039 0 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot5_collision" size="0.01 0.091" pos="0.039 0.01 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot6_collision" size="0.008 0.0835" pos="0.0395 0.018 -0.048" quat="0.707105 0 -0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
+                        <geom name="right_foot7_collision" size="0.01 0.025" pos="0.075 0.026 -0.048" quat="0.707105 0 0.707108 0" type="capsule" group="2" priority="1" friction="0.6 0.005 0.0001" rgba="0.15 0.75 0.95 0.9" />
                         <body name="LR_FOOT" pos="0.04 0 -0.037">
                           <inertial pos="0 0 0" mass="1e-09" diaginertia="0 0 0" />
                         </body>

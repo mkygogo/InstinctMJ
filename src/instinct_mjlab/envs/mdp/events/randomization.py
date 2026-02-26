@@ -61,8 +61,6 @@ def _randomize_prop_by_op(
             target.shape,
             device=data_randomized.device,
         )
-    else:
-        raise ValueError(f"Unsupported distribution '{distribution}'.")
 
     if operation == "add":
         randomized_target = target + sampled
@@ -70,8 +68,6 @@ def _randomize_prop_by_op(
         randomized_target = target * sampled
     elif operation == "abs":
         randomized_target = sampled
-    else:
-        raise ValueError(f"Unsupported operation '{operation}'.")
 
     data_randomized[index] = randomized_target
     return data_randomized
@@ -163,14 +159,13 @@ def randomize_rigid_body_coms(
         This function uses CPU tensors to assign the body coms. It is recommended to use this function
         only during the initialization of the environment.
     """
-    # In mjlab, delegate to the built-in randomize_field for body_ipos which
+    # In mjlab, delegate to the built-in DR API for body_ipos which
     # properly handles the simulation model data views.
-    from mjlab.envs.mdp.events import randomize_field
+    from mjlab.envs.mdp import dr
 
-    randomize_field(
+    dr.body_ipos(
         env,
         env_ids,
-        field="body_ipos",
         ranges={
             0: coms_x_distribution_params,
             1: coms_y_distribution_params,
@@ -410,12 +405,11 @@ def randomize_rigid_body_material(
         restitution_range: Range for restitution (unused in MuJoCo).
         num_buckets: Number of friction buckets (unused, kept for API compat).
     """
-    from mjlab.envs.mdp.events import randomize_field
+    from mjlab.envs.mdp import dr
 
-    randomize_field(
+    dr.geom_friction(
         env,
         env_ids=env_ids,
-        field="geom_friction",
         ranges={0: static_friction_range},
         distribution="uniform",
         operation="abs",

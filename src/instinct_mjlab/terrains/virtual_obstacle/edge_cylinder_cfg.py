@@ -4,7 +4,7 @@ from dataclasses import MISSING, dataclass, field
 import math
 from typing import TYPE_CHECKING, Literal
 
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
 from mjlab.sensor import GridPatternCfg
 
 from .edge_cylinder import GreedyconcatEdgeCylinder, PluckerEdgeCylinder, RansacEdgeCylinder, RayEdgeCylinder
@@ -96,11 +96,35 @@ class GreedyconcatEdgeCylinderCfg(EdgeCylinderCfg):
     adjacent_angle_threshold: float = 30.0
     """The angle threshold to consider two edges as adjacent."""
 
-    point_distance_threshold: float = 0.06
+    point_distance_threshold: float = 0.05
     """The distance threshold to consider a point as an inlier."""
 
     min_points: int = 5
     """The minimum number of points in one line."""
+
+    merge_collinear_gap: float = 0.0
+    """Max endpoint gap (meters) allowed when post-merging collinear segments.
+
+    Set to 0 to disable the post-merge stage and keep legacy behavior.
+    """
+
+    merge_collinear_angle_threshold: float = 25.0
+    """Max angular deviation (degrees) between segments for post-merge."""
+
+    merge_collinear_line_distance: float | None = None
+    """Line-distance threshold (meters) for post-merge collinearity test.
+
+    If None, fall back to ``point_distance_threshold``.
+    """
+
+    merge_collinear_max_passes: int = 3
+    """Maximum iterative passes for collinear post-merge."""
+
+    merge_collinear_max_segments: int = 4000
+    """Skip collinear post-merge when segment count exceeds this threshold.
+
+    This keeps startup cost bounded on very dense terrains.
+    """
 
 
 @dataclass(kw_only=True)

@@ -80,10 +80,10 @@ class G1ParkourPPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
     policy_observation_group: str = "actor"
     critic_observation_group: str = "critic"
     max_iterations: int = 30000
-    save_interval: int = 5000
+    save_interval: int = 1000
     experiment_name: str = "g1_parkour"
     resume: bool = False
-    load_run: str = ""
+    load_run: str = "^(?!_play$).*"
     empirical_normalization: bool = False
     policy: object = field(default_factory=lambda: MoEPolicyCfg())
     algorithm: object = field(default_factory=lambda: AmpAlgoCfg())

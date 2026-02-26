@@ -1,14 +1,3 @@
-"""mjlab-native Parkour environment config.
-
-This module defines the base parkour environment configuration used across all
-parkour task variants.  Mirrors the original InstinctLab ``parkour_env_cfg.py``
-including terrain definitions, scene sensors, observations, rewards, commands,
-terminations, events, and curriculum configurations.
-
-All manager configs are defined as factory functions returning
-``dict[str, XxxTermCfg]``, following the Instinct_mjlab convention.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -46,6 +35,7 @@ from instinct_mjlab.sensors.volume_points import (
 from instinct_mjlab.tasks.config.scene_style_cfg import (
   SceneVisualStyleCfg,
   apply_scene_visual_style,
+  attach_scene_spec_modifier,
 )
 from instinct_mjlab.tasks.mdp import (
   parkour_amp_reference_base_ang_vel,
@@ -159,7 +149,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
   border_width=3.0,
   num_rows=10,
   num_cols=20,
-  horizontal_scale=0.05,
+  horizontal_scale=0.07,
   vertical_scale=0.005,
   slope_threshold=1.0,
   use_cache=False,
@@ -1062,10 +1052,10 @@ def set_parkour_terminations(cfg: ManagerBasedRlEnvCfg) -> None:
       func=envs_mdp.bad_orientation,
       params={"limit_angle": 1.0},
     ),
-    "root_height": TerminationTermCfg(
-      func=parkour_mdp.root_height_below_env_origin_minimum,
-      params={"minimum_height": 0.5},
-    ),
+    # "root_height": TerminationTermCfg(
+    #   func=parkour_mdp.root_height_below_env_origin_minimum,
+    #   params={"minimum_height": 0.5},
+    # ),
   }
 
 
@@ -1113,7 +1103,7 @@ def set_parkour_events(cfg: ManagerBasedRlEnvCfg) -> None:
       mode="startup",
       params={
         "sensor_cfgs": SceneEntityCfg(_LEG_VOLUME_POINTS_SENSOR_NAME),
-        "enable_debug_vis": True,
+        "enable_debug_vis": False,
       },
     ),
     "reset_robot_joints": EventTermCfg(
@@ -1164,10 +1154,11 @@ def set_parkour_terrain(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
     terrain_type="hacked_generator",
     terrain_generator=copy.deepcopy(terrain_gen),
     max_init_terrain_level=5,
+    # Keep terrain generation unchanged and extract virtual obstacles from hfield
+    # by reconstructing hfield surface mesh first, then running mesh-based
+    # virtual-obstacle extraction.
     virtual_obstacle_source="heightfield",
-    virtual_obstacle_hfield_height_threshold=0.04,
-    virtual_obstacle_hfield_merge_runs=True,
-    virtual_obstacle_hfield_project_to_high_side=True,
+    virtual_obstacle_hfield_method="mesh_like",
     collision_debug_vis=False,
     collision_debug_rgba=(0.62, 0.2, 0.9, 0.35),
     virtual_obstacles={
@@ -1186,17 +1177,33 @@ def set_parkour_scene_visual_style(cfg: ManagerBasedRlEnvCfg) -> None:
       ground_mark="edge",
       # Matte neutral-gray palette with softer headlight to avoid washed-out
       # terrain details while keeping the ground visually bright.
-      ground_rgb1=(0.80, 0.80, 0.80),
-      ground_rgb2=(0.70, 0.70, 0.70),
-      ground_mark_rgb=(0.58, 0.58, 0.58),
+      ground_rgb1=(0.72, 0.72, 0.72),
+      ground_rgb2=(0.62, 0.62, 0.62),
+      ground_mark_rgb=(0.50, 0.50, 0.50),
       ground_reflectance=0.0,
       # Match mjlab-like softer lighting instead of the brighter global style.
-      headlight_ambient=(0.32, 0.32, 0.32),
-      headlight_diffuse=(0.52, 0.52, 0.52),
+      headlight_ambient=(0.24, 0.24, 0.24),
+      headlight_diffuse=(0.34, 0.34, 0.34),
       headlight_specular=(0.0, 0.0, 0.0),
     ),
     preserve_collision_rgba=False,
   )
+  # Terrain generator can add a directional fill light that over-brightens the
+  # checker ground in parkour scenes; keep it soft and matte.
+  attach_scene_spec_modifier(cfg.scene, _soften_parkour_terrain_lights)
+
+
+def _soften_parkour_terrain_lights(spec) -> None:
+  """Reduce terrain light intensity to avoid overexposed ground appearance."""
+  terrain_body = spec.body("terrain")
+  if terrain_body is None:
+    return
+
+  for light in terrain_body.lights:
+    light.castshadow = False
+    light.ambient[:] = (0.08, 0.08, 0.08)
+    light.diffuse[:] = (0.16, 0.16, 0.16)
+    light.specular[:] = (0.0, 0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -1209,17 +1216,20 @@ def set_parkour_basic_settings(cfg: ManagerBasedRlEnvCfg) -> None:
 
   Mirrors the original InstinctLab ``ParkourEnvCfg.__post_init__`` settings.
   """
-  cfg.scene.num_envs = 4096
+  cfg.scene.num_envs = 1024 * 3
   cfg.scene.env_spacing = 2.5
   cfg.episode_length_s = 20.0
   # Parkour introduces many simultaneous terrain contacts; fixed small caps from
   # tracking (nconmax=35, njmax=250) can overflow and drop contact constraints.
-  # Keep contact slots auto-sized, and set a sufficiently large constraint
-  # capacity to avoid mjwarp init/runtime overflow on rough-terrain mixes.
-  cfg.sim.nconmax = None
-  cfg.sim.njmax = 1024
-  # Increase CCD iterations moderately to reduce "opt.ccd_iterations needs to be increased".
-  cfg.sim.mujoco.ccd_iterations = 100
+  # In mjwarp, naconmax scales with nworld * nconmax; leaving nconmax auto-sized
+  # (192 for this model) can create very large temporary narrowphase buffers on
+  # 2048-env runs. Use a bounded per-world contact budget to control VRAM while
+  # keeping enough headroom for rough-terrain foot contacts.
+  cfg.sim.nconmax = 128
+  cfg.sim.njmax = 700
+  # Increase CCD robustness on dense hfield contacts.
+  cfg.sim.mujoco.ccd_iterations = 128
+  cfg.sim.mujoco.multiccd = True
 
 
 # ---------------------------------------------------------------------------
@@ -1234,20 +1244,23 @@ def set_parkour_play_overrides(cfg: ManagerBasedRlEnvCfg) -> None:
   """
   cfg.scene.num_envs = 10
   cfg.scene.env_spacing = 2.5
-  cfg.episode_length_s = 10.0
+  cfg.episode_length_s = 20.0
 
   # spawn the robot randomly in the grid (instead of their terrain levels)
   # reduce the number of terrains to save memory
-  if cfg.scene.terrain.terrain_generator is not None:
-    cfg.scene.terrain.terrain_generator.num_rows = 4
-    cfg.scene.terrain.terrain_generator.num_cols = 10
+  cfg.scene.terrain.terrain_generator.num_rows = 4
+  cfg.scene.terrain.terrain_generator.num_cols = 10
 
-  for sensor_cfg in cfg.scene.sensors:
-    if sensor_cfg.name == _LEG_VOLUME_POINTS_SENSOR_NAME:
-      sensor_cfg.debug_vis = True
+  leg_volume_points_sensor = next(
+    sensor_cfg
+    for sensor_cfg in cfg.scene.sensors
+    if sensor_cfg.name == _LEG_VOLUME_POINTS_SENSOR_NAME
+  )
+  leg_volume_points_sensor.debug_vis = True
 
   cfg.scene.terrain.collision_debug_vis = True
   cfg.commands[_BASE_VELOCITY_COMMAND_NAME].debug_vis = True
+  cfg.viewer.debug_vis_show_all_envs = True
 
   cfg.terminations["root_height"] = None
   cfg.events["physics_material"] = None

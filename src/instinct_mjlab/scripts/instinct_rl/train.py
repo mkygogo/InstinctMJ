@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import sys
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
@@ -41,6 +42,7 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.os import dump_yaml, get_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
+from mjlab.viewer import NativeMujocoViewer
 
 
 def _to_yaml_data(data: Any) -> Any:
@@ -304,8 +306,6 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   train_viewer = None
   if cfg.viewer == "native":
-    from mjlab.viewer import NativeMujocoViewer
-
     def _viewer_policy(_obs: torch.Tensor) -> torch.Tensor:
       return torch.zeros(
         (vec_env.num_envs, vec_env.num_actions),
@@ -386,13 +386,38 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
     runner.rollout_step = _rollout_step_with_view
 
-  runner.learn(
-    num_learning_iterations=cfg.agent.max_iterations,
-    init_at_random_ep_len=True,
-  )
-  if train_viewer is not None:
-    train_viewer.close()
-  vec_env.close()
+  handled_signal_name: str | None = None
+  signal_handlers_to_restore: dict[int, Any] = {}
+
+  def _interrupt_handler(signum, _frame):
+    nonlocal handled_signal_name
+    try:
+      handled_signal_name = signal.Signals(signum).name
+    except ValueError:
+      handled_signal_name = str(signum)
+    raise KeyboardInterrupt
+
+  install_signal_numbers: list[int] = [signal.SIGINT, signal.SIGTERM]
+  if hasattr(signal, "SIGQUIT"):
+    install_signal_numbers.append(signal.SIGQUIT)
+  for signum in install_signal_numbers:
+    signal_handlers_to_restore[signum] = signal.getsignal(signum)
+    signal.signal(signum, _interrupt_handler)
+
+  try:
+    runner.learn(
+      num_learning_iterations=cfg.agent.max_iterations,
+      init_at_random_ep_len=True,
+    )
+  except KeyboardInterrupt:
+    interrupt_name = handled_signal_name or "KeyboardInterrupt"
+    print(f"[WARN] Training interrupted by {interrupt_name}.")
+  finally:
+    for signum, previous_handler in signal_handlers_to_restore.items():
+      signal.signal(signum, previous_handler)
+    if train_viewer is not None:
+      train_viewer.close()
+    vec_env.close()
 
 
 def launch_training(task_id: str, args: TrainConfig | None = None) -> None:

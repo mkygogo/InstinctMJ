@@ -39,6 +39,11 @@ class NoisyGroupedRayCasterCamera(NoisyCameraMixin, GroupedRayCasterCamera):
         """Fills the buffers of the sensor data."""
 
         super().postprocess_rays()
-        env_ids = self._ALL_INDICES
+        if self._update_period_s > 0.0:
+            env_ids = self.refresh_mask.nonzero(as_tuple=False).squeeze(-1)
+        else:
+            env_ids = self._ALL_INDICES
+        if env_ids.numel() == 0:
+            return
         self.apply_noise_pipeline_to_all_data_types(env_ids)
         self.update_history_buffers(env_ids)

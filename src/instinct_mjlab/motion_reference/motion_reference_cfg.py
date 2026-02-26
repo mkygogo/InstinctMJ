@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from collections.abc import Sequence
 from typing import Literal
 
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
 from mjlab.sensor import SensorCfg
 
 from .motion_buffer import MotionBuffer, MotionReferenceData

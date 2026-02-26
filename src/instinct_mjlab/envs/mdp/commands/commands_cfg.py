@@ -4,8 +4,8 @@ from copy import deepcopy as _deepcopy
 from typing import TYPE_CHECKING, List, Literal
 
 from mjlab.managers import CommandTermCfg, SceneEntityCfg
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
-from instinct_mjlab.visualization.markers import BLUE_ARROW_X_MARKER_CFG, FRAME_MARKER_CFG, RED_ARROW_X_MARKER_CFG
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import BLUE_ARROW_X_MARKER_CFG, FRAME_MARKER_CFG, RED_ARROW_X_MARKER_CFG
 
 from .shadowing_command import (
     BaseHeightRefCommand,

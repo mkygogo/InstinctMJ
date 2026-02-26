@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 import mjlab.sim as sim_utils
 from mjlab.managers import CommandTerm, SceneEntityCfg
-from instinct_mjlab.visualization.markers import VisualizationMarkers
 from mjlab.utils.lab_api import math as math_utils
 
 import instinct_mjlab.utils.math as instinct_math_utils
@@ -146,16 +145,9 @@ class ShadowingCommandBase(CommandTerm):
         pass
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # set visibility of markers
-        # note: parent only deals with callbacks. not their visibility
-        if debug_vis and (getattr(self.cfg, "visualizer_cfg", None) is not None):
-            if not hasattr(self, "_visualizer"):
-                self._visualizer = VisualizationMarkers(self.cfg.visualizer_cfg)
-            # set their visibility to true
-            self._visualizer.set_visibility(True)
-        else:
-            if hasattr(self, "_visualizer"):
-                self._visualizer.set_visibility(False)
+        del debug_vis
+        # Legacy IsaacLab marker pipeline removed in mjlab-native mode.
+        return
 
     def _compute_debug_vis_data(self):
         """Compute and update the data for visualization."""
@@ -1726,7 +1718,8 @@ class LinkPosErrRefCommand(LinkPosRefCommand):
             start_point: The starting point of the arrow in shape (N, 3)
         """
         # obtain default scale of the marker
-        default_scale = self._visualizer.cfg.markers["arrow"].scale
+        arrow_marker_cfg = getattr(getattr(self.cfg, "visualizer_cfg", None), "markers", {}).get("arrow", None)
+        default_scale = getattr(arrow_marker_cfg, "scale", (0.35, 0.05, 0.05))
         default_direction = torch.zeros_like(direction)
         default_direction[:, 0] = 1.0
         normalized_direction = direction / torch.norm(direction, dim=-1, keepdim=True)

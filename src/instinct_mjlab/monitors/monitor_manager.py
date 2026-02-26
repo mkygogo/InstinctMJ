@@ -10,6 +10,7 @@ from mjlab.managers import ManagerBase, ManagerTermBase, SceneEntityCfg
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRLEnv
+    from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
 class MonitorSensor:
@@ -118,6 +119,13 @@ class MonitorManager(ManagerBase):
         """Whether the command terms have debug visualization implemented."""
         # check if function raises NotImplementedError
         return True
+
+    def debug_vis(self, visualizer: "DebugVisualizer") -> None:
+        """Render monitor debug visuals for terms that implement them."""
+        for term in self._terms.values():
+            debug_fn = getattr(term, "debug_vis", None)
+            if callable(debug_fn):
+                debug_fn(visualizer)
 
     """
     Operations

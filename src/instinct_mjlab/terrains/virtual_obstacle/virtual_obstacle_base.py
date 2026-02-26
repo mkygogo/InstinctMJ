@@ -6,7 +6,7 @@ import trimesh
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from instinct_mjlab.visualization.markers import VisualizationMarkersCfg
+from instinct_mjlab.visualization.marker_cfg import VisualizationMarkersCfg
 
 
 @dataclass(kw_only=True)

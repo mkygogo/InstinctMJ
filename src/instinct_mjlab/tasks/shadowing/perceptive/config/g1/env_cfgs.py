@@ -16,15 +16,11 @@ from .perceptive_vae_cfg import (
 def instinct_g1_perceptive_shadowing_env_cfg(
   play: bool = False,
 ) -> ManagerBasedRlEnvCfg:
-  return (
-    G1PerceptiveShadowingEnvCfg_PLAY(decimation=4)
-    if play
-    else G1PerceptiveShadowingEnvCfg(decimation=4)
-  )
+  return G1PerceptiveShadowingEnvCfg_PLAY() if play else G1PerceptiveShadowingEnvCfg()
 
 
 def instinct_g1_perceptive_vae_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  return G1PerceptiveVaeEnvCfg_PLAY(decimation=4) if play else G1PerceptiveVaeEnvCfg(decimation=4)
+  return G1PerceptiveVaeEnvCfg_PLAY() if play else G1PerceptiveVaeEnvCfg()
 
 
 __all__ = [

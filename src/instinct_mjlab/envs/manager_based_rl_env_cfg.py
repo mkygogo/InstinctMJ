@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnvCfg
 
-from instinct_mjlab.envs.ui import InstinctLabRLEnvWindow
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig
 
 
 @dataclass
 class InstinctLabRLEnvCfg(ManagerBasedRlEnvCfg):
   """Configuration for a reinforcement learning environment with the manager-based workflow."""
 
-  # ui settings
-  ui_window_class_type: type | None = InstinctLabRLEnvWindow
-  """Inherit from the manager-based RL environment window class."""
+  viewer: InstinctLabViewerConfig = field(default_factory=InstinctLabViewerConfig)
+  """Viewer Settings."""
 
   # monitor settings
   monitors: object | None = None

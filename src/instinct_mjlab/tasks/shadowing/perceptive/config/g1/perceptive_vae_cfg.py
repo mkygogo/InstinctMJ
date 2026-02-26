@@ -7,14 +7,13 @@ from functools import partial
 
 import mjlab.envs.mdp as mdp
 import mjlab.sim as sim_utils
-from mjlab.assets import RigidObjectCfg
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
 from mjlab.managers import ObservationGroupCfg as ObsGroupCfg
 from mjlab.managers import ObservationTermCfg as ObsTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.utils.noise import UniformNoiseCfg
-from mjlab.viewer import ViewerConfig
+from instinct_mjlab.envs.viewer_cfg import InstinctLabViewerConfig as ViewerConfig
 
 import instinct_mjlab.envs.mdp as instinct_mdp
 import instinct_mjlab.tasks.shadowing.mdp as shadowing_mdp
@@ -73,6 +72,7 @@ class TerrainMotionCfg(TerrainMotionCfgBase):
 
 
 motion_reference_cfg = MotionReferenceManagerCfg(
+    name="motion_reference",
     entity_name="robot",
     robot_model_path=G1_MJCF_PATH,
     link_of_interests=[
@@ -116,26 +116,19 @@ def _make_motion_reference_cfg(*, debug_vis: bool = False) -> MotionReferenceMan
     return cfg
 
 
-def _apply_stl_heightfield_terrain_source(
+def _apply_motion_matched_terrain_source(
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg,
     *,
     default_path: str,
     default_metadata_yaml: str,
 ) -> None:
-    """Bind perceptive terrain generator to STL-heightfield source."""
+    """Bind perceptive terrain generator to motion-matched source."""
     terrain_generator = scene.terrain.terrain_generator
-    terrain_cfg = perceptual_cfg.get_stl_heightfield_subterrain_cfg(
+    terrain_cfg = perceptual_cfg.get_motion_matched_subterrain_cfg(
         terrain_generator.sub_terrains
     )
-    terrain_path, terrain_metadata_yaml = perceptual_cfg.resolve_perceptive_stl_heightfield_source(
-        default_path=default_path,
-        default_metadata_yaml=default_metadata_yaml,
-    )
-    terrain_cfg.path = terrain_path
-    terrain_cfg.metadata_yaml = terrain_metadata_yaml
-    terrain_cfg.hfield_floor_z_offset = perceptual_cfg.resolve_perceptive_hfield_floor_z_offset(
-        default_offset=float(terrain_cfg.hfield_floor_z_offset)
-    )
+    terrain_cfg.path = default_path
+    terrain_cfg.metadata_yaml = default_metadata_yaml
 
 
 def make_vae_observations() -> dict[str, ObsGroupCfg]:
@@ -270,24 +263,31 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
 class G1PerceptiveVaeEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg = field(default_factory=lambda: perceptual_cfg.PerceptiveShadowingSceneCfg(
         num_envs=4096,
-        robot=deepcopy(G1_CFG),
-        motion_reference=_make_motion_reference_cfg(debug_vis=False),
-        height_scanner=None,
+        entities=perceptual_cfg.make_perceptive_scene_entities(
+            robot=deepcopy(G1_CFG),
+        ),
+        sensors=perceptual_cfg.make_perceptive_scene_sensors(
+            motion_reference=_make_motion_reference_cfg(debug_vis=False),
+            include_height_scanner=False,
+        ),
     ))
     observations: dict = field(default_factory=make_vae_observations)
 
     def __post_init__(self):
         super().__post_init__()
 
-        self.scene.height_scanner = None
+        perceptual_cfg.remove_scene_sensor_cfg(self.scene, "height_scanner")
+        camera_cfg = perceptual_cfg.get_camera_sensor_cfg(self.scene)
+        robot_cfg = perceptual_cfg.get_scene_entity_cfg(self.scene, "robot")
+        motion_reference_cfg = perceptual_cfg.get_motion_reference_cfg(self.scene)
 
-        self.scene.camera.data_histories["distance_to_image_plane_noised"] = 10
+        camera_cfg.data_histories["distance_to_image_plane_noised"] = 10
         self.observations["policy"].terms["depth_image"].params["history_skip_frames"] = 3
-        self.scene.robot.articulation.actuators = beyondmimic_g1_29dof_actuator_cfgs
+        robot_cfg.articulation.actuators = beyondmimic_g1_29dof_actuator_cfgs
         self.actions["joint_pos"].scale = beyondmimic_action_scale
 
-        motion_buffer = list(self.scene.motion_reference.motion_buffers.values())[0]
-        _apply_stl_heightfield_terrain_source(
+        motion_buffer = list(motion_reference_cfg.motion_buffers.values())[0]
+        _apply_motion_matched_terrain_source(
             self.scene,
             default_path=motion_buffer.path,
             default_metadata_yaml=motion_buffer.metadata_yaml,
@@ -296,7 +296,7 @@ class G1PerceptiveVaeEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
         self.run_name = "g1PerceptiveVae" + "".join(
             [
                 f"_propHistory{PROPRIO_HISTORY_LENGTH}",
-                f"_depthHist{self.scene.camera.data_histories['distance_to_image_plane_noised']}Skip{self.observations['policy'].terms['depth_image'].params['history_skip_frames']}",
+                f"_depthHist{camera_cfg.data_histories['distance_to_image_plane_noised']}Skip{self.observations['policy'].terms['depth_image'].params['history_skip_frames']}",
             ]
         )
 
@@ -305,9 +305,14 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg = field(default_factory=lambda: perceptual_cfg.PerceptiveShadowingSceneCfg(
         num_envs=1,
         env_spacing=2.5,
-        robot=deepcopy(G1_CFG),
-        robot_reference=deepcopy(G1_CFG),
-        motion_reference=_make_motion_reference_cfg(debug_vis=True),
+        entities=perceptual_cfg.make_perceptive_scene_entities(
+            robot=deepcopy(G1_CFG),
+            robot_reference=deepcopy(G1_CFG),
+        ),
+        sensors=perceptual_cfg.make_perceptive_scene_sensors(
+            motion_reference=_make_motion_reference_cfg(debug_vis=True),
+            include_height_scanner=False,
+        ),
     ))
 
     viewer: ViewerConfig = field(default_factory=lambda: ViewerConfig(
@@ -315,20 +320,24 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
         distance=3.2016,
         elevation=51.3402,
         azimuth=90.0,
-        origin_type=ViewerConfig.OriginType.ASSET_ROOT,
+        origin_type=ViewerConfig.OriginType.ASSET_BODY,
         entity_name="robot",
+        body_name="torso_link",
     ))
 
     def __post_init__(self):
         super().__post_init__()
 
+        motion_reference_cfg = perceptual_cfg.get_motion_reference_cfg(self.scene)
+        camera_cfg = perceptual_cfg.get_camera_sensor_cfg(self.scene)
+
         # deactivate adaptive sampling and start from the 0.0s of the motion
         self.curriculum["beyond_adaptive_sampling"] = None
         self.events["bin_fail_counter_smoothing"] = None
-        MOTION_NAME = list(self.scene.motion_reference.motion_buffers.keys())[0]
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_start_from_middle_range = [0.0, 0.0]
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].motion_bin_length_s = None
-        self.scene.motion_reference.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = "independent"
+        MOTION_NAME = list(motion_reference_cfg.motion_buffers.keys())[0]
+        motion_reference_cfg.motion_buffers[MOTION_NAME].motion_start_from_middle_range = [0.0, 0.0]
+        motion_reference_cfg.motion_buffers[MOTION_NAME].motion_bin_length_s = None
+        motion_reference_cfg.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = "independent"
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].path = (
         #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251115_diveRoll4_kneelClimb_jumpSit_rollVault"
         # )
@@ -352,8 +361,10 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
         # self.scene.terrain.terrain_type = "plane"
         # self.scene.terrain.terrain_generator = None
 
-        self.scene.camera.debug_vis = True
+        camera_cfg.debug_vis = True
+        self.scene.terrain.collision_debug_vis = False
         self.observations["policy"].terms["depth_image"].params["debug_vis"] = True
+        self.viewer.debug_vis_show_all_envs = True
 
         # change reset robot event with more pitch_down randomization (since the robot is facing -y axis)
         # self.events.reset_robot.params["randomize_pose_range"]["roll"] = (0.0, 0.6)

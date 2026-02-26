@@ -6,6 +6,7 @@ import uuid
 import mujoco
 import numpy as np
 import trimesh
+from scipy import ndimage
 
 from mjlab.terrains.terrain_generator import (
     FlatPatchSamplingCfg,
@@ -13,7 +14,6 @@ from mjlab.terrains.terrain_generator import (
     TerrainGeometry,
     TerrainOutput,
 )
-from mjlab.terrains.utils import find_flat_patches_from_heightfield
 
 
 def _unwrap_height_field_function(function_obj: object) -> object:
@@ -86,6 +86,130 @@ def _add_wall_geometries(
     return geoms
 
 
+def _find_flat_patches_from_heightfield_nearest(
+    *,
+    heights: np.ndarray,
+    terrain_size: tuple[float, float],
+    horizontal_scale: float,
+    z_offset: float,
+    cfg: FlatPatchSamplingCfg,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Find flat patches on hfield; if range is empty, choose nearest valid patch."""
+    heights_work = np.asarray(heights, dtype=np.float64)
+    grid_scale = float(horizontal_scale)
+    if cfg.grid_resolution is not None and float(cfg.grid_resolution) < grid_scale:
+        zoom_factor = grid_scale / float(cfg.grid_resolution)
+        heights_work = np.asarray(ndimage.zoom(heights_work, zoom_factor, order=1))
+        grid_scale = float(cfg.grid_resolution)
+
+    num_rows, num_cols = heights_work.shape
+
+    if isinstance(cfg.patch_radius, (list, tuple)):
+        patch_radius = max(float(radius) for radius in cfg.patch_radius)
+    else:
+        patch_radius = float(cfg.patch_radius)
+    radius_pixels = int(np.ceil(patch_radius / grid_scale))
+
+    y_grid, x_grid = np.ogrid[
+        -radius_pixels : radius_pixels + 1,
+        -radius_pixels : radius_pixels + 1,
+    ]
+    footprint = (x_grid**2 + y_grid**2) <= radius_pixels**2
+
+    max_h = ndimage.maximum_filter(
+        heights_work,
+        footprint=footprint,
+        mode="constant",
+        cval=-np.inf,
+    )
+    min_h = ndimage.minimum_filter(
+        heights_work,
+        footprint=footprint,
+        mode="constant",
+        cval=np.inf,
+    )
+    valid_base_mask = (max_h - min_h) <= float(cfg.max_height_diff)
+    valid_base_mask[:radius_pixels, :] = False
+    valid_base_mask[-radius_pixels:, :] = False
+    valid_base_mask[:, :radius_pixels] = False
+    valid_base_mask[:, -radius_pixels:] = False
+
+    z_values = heights_work + float(z_offset)
+    z_valid = (z_values >= float(cfg.z_range[0])) & (z_values <= float(cfg.z_range[1]))
+    valid_base_mask &= z_valid
+
+    x_coords = np.arange(num_cols) * grid_scale
+    y_coords = np.arange(num_rows) * grid_scale
+
+    def _convert_range_to_grid(
+        value_range: tuple[float, float],
+        axis_size: float,
+        axis_coords: np.ndarray,
+    ) -> tuple[tuple[float, float], float]:
+        lo = float(value_range[0])
+        hi = float(value_range[1])
+        if lo > hi:
+            lo, hi = hi, lo
+
+        half_axis = 0.5 * float(axis_size)
+        # InstinctLab ranges are center-relative; keep absolute ranges unchanged.
+        if lo >= -half_axis - 1.0e-6 and hi <= half_axis + 1.0e-6:
+            lo += half_axis
+            hi += half_axis
+
+        min_coord = float(axis_coords[0]) if axis_coords.size > 0 else 0.0
+        max_coord = float(axis_coords[-1]) if axis_coords.size > 0 else 0.0
+        lo = float(np.clip(lo, min_coord, max_coord))
+        hi = float(np.clip(hi, min_coord, max_coord))
+        if lo > hi:
+            lo, hi = hi, lo
+
+        if (hi - lo) < grid_scale:
+            target = 0.5 * (lo + hi)
+            snapped = float(np.clip(np.round(target / grid_scale) * grid_scale, min_coord, max_coord))
+            return (snapped, snapped), snapped
+
+        lo = float(np.clip(np.floor(lo / grid_scale) * grid_scale, min_coord, max_coord))
+        hi = float(np.clip(np.ceil(hi / grid_scale) * grid_scale, min_coord, max_coord))
+        if lo > hi:
+            hi = lo
+        return (lo, hi), 0.5 * (lo + hi)
+
+    x_range, target_x = _convert_range_to_grid(cfg.x_range, float(terrain_size[0]), x_coords)
+    y_range, target_y = _convert_range_to_grid(cfg.y_range, float(terrain_size[1]), y_coords)
+
+    x_valid = (x_coords >= float(x_range[0])) & (x_coords <= float(x_range[1]))
+    y_valid = (y_coords >= float(y_range[0])) & (y_coords <= float(y_range[1]))
+    valid_mask = valid_base_mask & y_valid[:, None] & x_valid[None, :]
+    valid_indices = np.argwhere(valid_mask)
+
+    if len(valid_indices) == 0:
+        target_col = int(np.clip(np.round(target_x / grid_scale), 0, num_cols - 1))
+        target_row = int(np.clip(np.round(target_y / grid_scale), 0, num_rows - 1))
+        fallback_indices = np.argwhere(valid_base_mask)
+        if len(fallback_indices) == 0:
+            selected = np.tile(np.array([target_row, target_col], dtype=np.int64), (cfg.num_patches, 1))
+        else:
+            dist2 = (fallback_indices[:, 0] - target_row) ** 2 + (fallback_indices[:, 1] - target_col) ** 2
+            sorted_idx = np.argsort(dist2)
+            nearest = fallback_indices[sorted_idx]
+            pool_size = max(1, min(len(nearest), cfg.num_patches * 4))
+            pool = nearest[:pool_size]
+            replace = pool_size < cfg.num_patches
+            chosen = rng.choice(pool_size, size=cfg.num_patches, replace=replace)
+            selected = pool[chosen]
+    else:
+        replace = len(valid_indices) < cfg.num_patches
+        chosen = rng.choice(len(valid_indices), size=cfg.num_patches, replace=replace)
+        selected = valid_indices[chosen]
+
+    x = selected[:, 1] * grid_scale
+    y = selected[:, 0] * grid_scale
+    z = heights_work[selected[:, 0], selected[:, 1]] + float(z_offset)
+    return np.stack([x, y, z], axis=-1)
+
+
 def _height_field_to_output(
     *,
     heights: np.ndarray,
@@ -148,8 +272,9 @@ def _height_field_to_output(
         z_offset = float(elevation_min) * float(cfg.vertical_scale)
         flat_patches = {}
         for patch_name, patch_cfg in cfg.flat_patch_sampling.items():
-            flat_patches[patch_name] = find_flat_patches_from_heightfield(
+            flat_patches[patch_name] = _find_flat_patches_from_heightfield_nearest(
                 heights=heights_phys,
+                terrain_size=cfg.size,
                 horizontal_scale=float(cfg.horizontal_scale),
                 z_offset=z_offset,
                 cfg=patch_cfg,

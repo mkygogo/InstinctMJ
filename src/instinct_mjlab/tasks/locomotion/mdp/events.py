@@ -30,10 +30,9 @@ def randomize_rigid_body_material(
 ) -> None:
   """Randomize rigid-body geom friction coefficients."""
   del num_buckets
-  mdp.randomize_field(
+  mdp.dr.geom_friction(
     env=env,
     env_ids=env_ids,
-    field="geom_friction",
     ranges={
       0: static_friction_range,
       1: dynamic_friction_range,
@@ -41,6 +40,7 @@ def randomize_rigid_body_material(
     },
     operation="abs",
     asset_cfg=asset_cfg,
+    axes=[0, 1, 2],
   )
 
 
@@ -52,10 +52,9 @@ def randomize_rigid_body_mass(
   operation: Literal["add", "scale", "abs"] = "add",
 ) -> None:
   """Randomize rigid-body mass."""
-  mdp.randomize_field(
+  mdp.dr.body_mass(
     env=env,
     env_ids=env_ids,
-    field="body_mass",
     ranges=mass_distribution_params,
     operation=operation,
     asset_cfg=asset_cfg,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -32,7 +33,6 @@ from instinct_mjlab.tasks.registry import (
 )
 from instinct_mjlab.envs import InstinctRlEnv
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
@@ -96,23 +96,6 @@ class _ViewerEnvAdapter:
     return self._vec_env.close()
 
 
-class _InstinctViserPlayViewer(ViserPlayViewer):
-  """Viser viewer with optional default collision geom visibility."""
-
-  def __init__(self, *args, show_collision_group3: bool = False, **kwargs):
-    super().__init__(*args, **kwargs)
-    self._show_collision_group3 = show_collision_group3
-
-  def setup(self) -> None:
-    super().setup()
-    if not self._show_collision_group3:
-      return
-    # Group 3 is commonly used for collision geoms (including terrain colliders).
-    self._scene.geom_groups_visible[3] = True
-    self._scene._sync_visibilities()
-    self._scene.needs_update = True
-
-
 def _resolve_device(device: str | None) -> str:
   if device is not None:
     return device
@@ -132,6 +115,19 @@ def _resolve_rollout_steps(cfg: PlayConfig) -> int | None:
   if cfg.viewer == "none":
     return cfg.video_length if cfg.video else 300
   return None
+
+
+def _force_viewer_realtime_1x(viewer) -> None:
+  """Set viewer playback speed to 1x at startup."""
+  multipliers = list(getattr(viewer, "SPEED_MULTIPLIERS", ()))
+  if len(multipliers) == 0:
+    return
+  if 1.0 in multipliers:
+    speed_index = multipliers.index(1.0)
+  else:
+    speed_index = min(range(len(multipliers)), key=lambda i: abs(multipliers[i] - 1.0))
+  viewer._speed_index = int(speed_index)
+  viewer._time_multiplier = float(multipliers[speed_index])
 
 
 def _resolve_tracking_motion(_task_id: str, cfg: PlayConfig, env_cfg) -> None:
@@ -203,19 +199,57 @@ def _resolve_checkpoint(
     return checkpoint
 
   log_root_path = Path("logs") / "instinct_rl" / agent_cfg.experiment_name
-  run_regex = cfg.load_run if cfg.load_run is not None else agent_cfg.load_run
+  run_regex = cfg.load_run if cfg.load_run not in (None, "") else agent_cfg.load_run
+  if run_regex in (None, ""):
+    run_regex = ".*"
   checkpoint_regex = (
     cfg.checkpoint_pattern
     if cfg.checkpoint_pattern is not None
     else agent_cfg.load_checkpoint
   )
-  checkpoint = get_checkpoint_path(
-    log_path=log_root_path,
-    run_dir=run_regex,
-    checkpoint=checkpoint_regex,
+  if checkpoint_regex in (None, ""):
+    checkpoint_regex = "model_.*.pt"
+
+  if not log_root_path.exists():
+    raise ValueError(f"Log path does not exist: {log_root_path}")
+
+  candidate_runs: list[Path] = []
+  for run in log_root_path.iterdir():
+    if not run.is_dir():
+      continue
+    if run.name == "wandb_checkpoints":
+      continue
+    # Keep play artifacts out of auto checkpoint lookup by default.
+    if run_regex == ".*" and run.name == "_play":
+      continue
+    if re.match(run_regex, run.name):
+      candidate_runs.append(run)
+
+  if len(candidate_runs) == 0:
+    raise ValueError(
+      f"No run directories found in {log_root_path} matching '{run_regex}'"
+    )
+  candidate_runs.sort()
+
+  for run_path in reversed(candidate_runs):
+    checkpoints = [
+      file.name
+      for file in run_path.iterdir()
+      if file.is_file() and re.match(checkpoint_regex, file.name)
+    ]
+    if len(checkpoints) == 0:
+      continue
+    checkpoints.sort(key=lambda name: f"{name:0>15}")
+    checkpoint = run_path / checkpoints[-1]
+    print(f"[INFO] Auto-selected checkpoint for {task_id}: {checkpoint}")
+    return checkpoint
+
+  raise ValueError(
+    "No checkpoint file found in matching runs.\n"
+    f"  log_path: {log_root_path}\n"
+    f"  run_regex: {run_regex}\n"
+    f"  checkpoint_regex: {checkpoint_regex}"
   )
-  print(f"[INFO] Auto-selected checkpoint for {task_id}: {checkpoint}")
-  return checkpoint
 
 
 def _resolve_video_dir(
@@ -491,16 +525,13 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
   rollout_steps = _resolve_rollout_steps(cfg)
 
   if viewer_backend == "native":
-    NativeMujocoViewer(viewer_env, policy).run(num_steps=rollout_steps)
+    viewer = NativeMujocoViewer(viewer_env, policy)
+    _force_viewer_realtime_1x(viewer)
+    viewer.run(num_steps=rollout_steps)
   elif viewer_backend == "viser":
-    show_collision_group3 = "Parkour" in task_id
-    if show_collision_group3:
-      print("[INFO] Enabled geom group G3 visibility for parkour collision debug.")
-    _InstinctViserPlayViewer(
-      viewer_env,
-      policy,
-      show_collision_group3=show_collision_group3,
-    ).run(num_steps=rollout_steps)
+    viewer = ViserPlayViewer(viewer_env, policy)
+    _force_viewer_realtime_1x(viewer)
+    viewer.run(num_steps=rollout_steps)
   elif viewer_backend == "none":
     _run_headless_rollout(
       viewer_env,
