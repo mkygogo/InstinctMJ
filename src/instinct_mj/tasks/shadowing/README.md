@@ -16,11 +16,17 @@ Install `mjlab` and `instinct_rl` source code first (see `InstinctMJ/README.md` 
 
 This task follows the BeyondMimic whole-body tracking setup.
 
-1. Go to `beyondmimic/config/g1/beyondmimic_plane_cfg.py` and set the motion source:
+1. Go to `beyondmimic/config/g1/beyondmimic_plane_cfg.py` and update the local motion dataset settings here:
 
-    - `MOTION_NAME`: An identifier for the motion setup you are using.
-    - `AmassMotionCfg.path`: The folder path to where you store the motion files.
-    - `_hacked_selected_file_`: The filename of the motion you want to use, relative to the `AmassMotionCfg.path` folder.
+    ```python
+    MOTION_NAME = "LafanSprint1"
+    _hacked_selected_file_ = "sprint1_subject2_retargetted.npz"
+    path=os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
+    ```
+
+    - `MOTION_NAME`: Motion setup name used by the config.
+    - `_hacked_selected_file_`: The motion file to load, relative to the dataset root.
+    - `path=os.path.expanduser(...)`: The local dataset root you need to change on your machine.
 
 2. Train the policy:
 ```bash
@@ -38,11 +44,20 @@ instinct-play Instinct-BeyondMimic-Plane-G1-Play-v0 --load-run <run_name>
 - `Instinct-Shadowing-WholeBody-Plane-G1-v0` (train)
 - `Instinct-Shadowing-WholeBody-Plane-G1-Play-v0` (play)
 
-1. Go to `whole_body/config/g1/plane_shadowing_cfg.py` and set the `MOTION_NAME`, `_path_`, `_hacked_selected_files_` to the motion you want to use.
+1. Go to `whole_body/config/g1/plane_shadowing_cfg.py` and update the motion dataset settings used by the active block:
 
-    - `MOTION_NAME`: An identifier for the motion setup you are using.
-    - `_path_`: The folder path to where you store the motion files.
-    - `_hacked_selected_files_`: The filenames of the motion you want to use, relative to the `_path_` folder.
+    ```python
+    MOTION_NAME = "LafanFiltered"
+    _hacked_selected_files_ = [
+        ...
+    ]
+    path=os.path.expanduser("~/Xyk/Datasets/NoKov-Marslab-Motions-instinctnpz/20251016_diveroll4_single")
+    ```
+
+    - `MOTION_NAME`: Motion setup name used by the config.
+    - `_hacked_selected_files_`: One or more motion files to load, relative to the dataset root.
+    - `path=os.path.expanduser(...)`: The actual active dataset root used by `motion_buffers[MOTION_NAME]`.
+    - `_path_`: Exists in some preset blocks, but if you use the current active config you should update the `path=...` inside `motion_buffers`.
 
 2. Train the policy:
 ```bash
@@ -60,9 +75,15 @@ instinct-play Instinct-Shadowing-WholeBody-Plane-G1-Play-v0 --load-run <run_name
 - `Instinct-Perceptive-Shadowing-G1-v0` (train)
 - `Instinct-Perceptive-Shadowing-G1-Play-v0` (play)
 
-1. Go to `perceptive/config/g1/perceptive_shadowing_cfg.py` and set the `MOTION_FOLDER` to the motion you want to use. The `motion_buffer` and corresponding terrain generator will read the `MOTION_FOLDER` and corresponding `metadata.yaml` file.
+1. Go to `perceptive/config/g1/perceptive_shadowing_cfg.py` and update the local dataset root here:
 
-    - `MOTION_FOLDER`: The folder path to where you store the motion files.
+    ```python
+    MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
+    ```
+
+    The motion buffer and terrain generator read `MOTION_FOLDER` and the `metadata.yaml` under that directory.
+
+    - `MOTION_FOLDER`: The local folder containing the motion files and `metadata.yaml`.
 
 2. Train the policy:
 ```bash

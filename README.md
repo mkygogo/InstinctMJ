@@ -160,6 +160,17 @@ Export ONNX for parkour:
 instinct-play Instinct-Parkour-Target-Amp-G1-Play-v0 --load-run <run_name> --export-onnx
 ```
 
+Before training or playing parkour tasks, update the local dataset root in
+`src/instinct_mj/tasks/parkour/config/g1/g1_parkour_target_amp_cfg.py`:
+
+```python
+_PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
+```
+
+If your filtered motion list is stored elsewhere, also update
+`filtered_motion_selection_filepath` in the same file. See
+`src/instinct_mj/tasks/parkour/README.md` for the task-specific notes.
+
 Module form is also available when console scripts are not on `PATH`:
 
 ```bash

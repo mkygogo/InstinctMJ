@@ -44,11 +44,18 @@ The BeyondMimic reward system includes:
 
 ### Configure Motion Source
 
-Go to `config/g1/beyondmimic_plane_cfg.py` and set the motion source:
+Go to `config/g1/beyondmimic_plane_cfg.py` and update the motion source here:
+
+```python
+MOTION_NAME = "LafanSprint1"
+_hacked_selected_file_ = "sprint1_subject2_retargetted.npz"
+path=os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
+```
 
 - `MOTION_NAME`: An identifier for the motion setup you are using.
-- `AmassMotionCfg.path`: The folder path to where you store the motion files.
-- `_hacked_selected_file_`: The filename of the motion you want to use, relative to the `AmassMotionCfg.path` folder.
+- `_hacked_selected_file_`: The filename of the motion you want to use, relative to the dataset root.
+- `path=os.path.expanduser(...)`: The local dataset root you need to change on your machine.
+- `filtered_motion_selection_filepath`: This file is auto-generated from `MOTION_NAME`, so usually you do not need to edit it by hand.
 
 ### Training
 
@@ -89,7 +96,7 @@ This task is organized around the current `InstinctMJ` / `mjlab` layout:
 
 ## Motion Data
 
-The configuration is set up to use the Ubisoft LAFAN-1 dataset with GMR retargeting for the G1 robot. Make sure you have the appropriate motion data available at:
+The configuration is set up to use the Ubisoft LAFAN-1 dataset with GMR retargeting for the G1 robot. By default, the current config points to:
 ```
 ~/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz
 ```

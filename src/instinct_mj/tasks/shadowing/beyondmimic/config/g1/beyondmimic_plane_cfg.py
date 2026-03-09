@@ -45,6 +45,8 @@ from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
 # Motion configuration
+# NOTE: Change `MOTION_NAME`, `_hacked_selected_file_`, and the dataset path below
+# to your local motion setup before training / play.
 MOTION_NAME = "LafanKungfu1"
 _hacked_selected_file_ = "fightAndSports1_subject1_retargetted.npz"
 MOTION_NAME = "LafanSprint1"
@@ -91,6 +93,7 @@ motion_reference_cfg = MotionReferenceManagerCfg(
     visualizing_robot_from="reference_frame",
     motion_buffers={
         MOTION_NAME: AmassMotionCfgBase(
+            # NOTE: Change this to your local BeyondMimic motion dataset root.
             path=os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz"),
             retargetting_func=None,
             filtered_motion_selection_filepath=f"/tmp/{MOTION_NAME}.yaml",

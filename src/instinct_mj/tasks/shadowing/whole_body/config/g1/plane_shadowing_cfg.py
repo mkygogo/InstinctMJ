@@ -131,6 +131,8 @@ _hacked_selected_files_ = ["fightAndSports1_subject1_retargetted.npz"]
 # MOTION_NAME = "test"
 # _hacked_selected_files_ = ["CMU/90/90_26_retargetted.npz"]
 
+# NOTE: Change `MOTION_NAME`, `_hacked_selected_files_`, and the active dataset path
+# below to your local motion setup before training / play.
 MOTION_NAME = "LafanFight5Files"
 _path_ = os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
 _hacked_selected_files_ = [
@@ -327,6 +329,7 @@ motion_reference_cfg = MotionReferenceManagerCfg(
             # path = os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
             # path = os.path.expanduser("~/Xyk/Datasets/AMASS_SMPLX-NG_GMR_29dof_g1_torsoBase_retargetted_20250901_instinctnpz")
             # path = _path_
+            # NOTE: Change this to the active local whole-body shadowing dataset root.
             path=os.path.expanduser("~/Xyk/Datasets/NoKov-Marslab-Motions-instinctnpz/20251016_diveroll4_single"),
             retargetting_func=None,
             filtered_motion_selection_filepath=None,

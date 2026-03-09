@@ -28,6 +28,7 @@ from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
+# NOTE: Change this to your local perceptive shadowing dataset folder.
 MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
 
 
@@ -35,6 +36,8 @@ MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
 class TerrainMotionCfg(TerrainMotionCfgBase):
     path: object = field(default_factory=lambda: os.path.expanduser(MOTION_FOLDER))
 
+    # NOTE: `metadata.yaml` is expected under `MOTION_FOLDER`; change this if your
+    # metadata file lives at another location.
     metadata_yaml: object = field(default_factory=lambda: os.path.expanduser(f"{MOTION_FOLDER}/metadata.yaml"))
 
     max_origins_per_motion: int = 49

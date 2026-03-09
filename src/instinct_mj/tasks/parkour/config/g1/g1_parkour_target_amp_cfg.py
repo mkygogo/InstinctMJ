@@ -69,6 +69,9 @@ from instinct_mj.terrains.virtual_obstacle.edge_cylinder_cfg import Greedyconcat
 from instinct_mj.utils.noise import CropAndResizeCfg, DepthNormalizationCfg, GaussianBlurNoiseCfg
 
 __file_dir__ = os.path.dirname(os.path.realpath(__file__))
+# NOTE: Change this to your local parkour dataset root before training / play.
+# Example:
+# _PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
 _PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
 
 
@@ -81,8 +84,10 @@ _PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_mot
 class AmassMotionCfg(AmassMotionCfgBase):
     """Parkour AMASS motion buffer config."""
 
+    # NOTE: Motion files are resolved from `_PARKOUR_DATASET_DIR`.
     path: str = _PARKOUR_DATASET_DIR
     retargetting_func: object | None = None
+    # NOTE: If your filtered motion list uses another filename or location, update it here.
     filtered_motion_selection_filepath: str | None = os.path.join(
         _PARKOUR_DATASET_DIR, "parkour_motion_without_run.yaml"
     )
