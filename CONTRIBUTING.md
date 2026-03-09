@@ -23,7 +23,13 @@ cd InstinctMJ
 uv sync
 ```
 
-If you use `pip`, install `../mjlab`, `../instinct_rl`, and `.` in editable mode.
+If you use `pip`, install `mjlab`, `instinct_rl`, and `InstinctMJ` from the public repositories in editable mode:
+
+```bash
+pip install -e "git+https://github.com/mujocolab/mjlab.git#egg=mjlab"
+pip install -e "git+https://github.com/project-instinct/instinct_rl.git#egg=instinct_rl"
+pip install -e .
+```
 
 ## Contribution Guidelines
 

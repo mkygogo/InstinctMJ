@@ -164,7 +164,6 @@ def instinct_g1_parkour_amp_env_cfg(
     Returns:
       A ``ManagerBasedRlEnvCfg`` instance with parkour settings applied.
     """
-    # Scene settings (start from tracking base with G1 robot)
     cfg = unitree_g1_flat_tracking_env_cfg(play=play, has_state_estimation=True)
     cfg.monitors = {}
     cfg.viewer.origin_type = ViewerConfig.OriginType.WORLD
@@ -176,21 +175,12 @@ def instinct_g1_parkour_amp_env_cfg(
     cfg.scene.num_envs = 2048
     cfg.scene.env_spacing = 2.5
     cfg.episode_length_s = 20.0
-    # Parkour introduces many simultaneous terrain contacts; fixed small caps from
-    # tracking (nconmax=35, njmax=250) can overflow and drop contact constraints.
-    # In mjwarp, naconmax scales with nworld * nconmax; leaving nconmax auto-sized
-    # (192 for this model) can create very large temporary narrowphase buffers on
-    # 4096-env runs. Use a bounded per-world contact budget to control VRAM while
-    # keeping enough headroom for rough-terrain foot contacts.
     cfg.sim.nconmax = 128
     cfg.sim.njmax = 700
-    # Keep solver iterations aligned with mjlab task examples and tracking base.
     cfg.sim.mujoco.iterations = 10
     cfg.sim.mujoco.ls_iterations = 20
-    # Increase CCD robustness on dense hfield contacts.
     cfg.sim.mujoco.ccd_iterations = 128
     cfg.sim.mujoco.multiccd = False
-    # G1-specific actuators
     robot_cfg = cfg.scene.entities["robot"]
     robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_delayed_actuator_cfgs)
     joint_pos_action: JointPositionActionCfg = cfg.actions["joint_pos"]
@@ -209,12 +199,6 @@ def instinct_g1_parkour_amp_env_cfg(
         terrain_type="hacked_generator",
         terrain_generator=copy.deepcopy(terrain_gen),
         max_init_terrain_level=5,
-        # Keep terrain generation unchanged and extract virtual obstacles from the
-        # generator-side terrain surface mesh built from the same hfield->mesh path.
-        # This keeps mesh-based edge extraction on the terrain surface only and
-        # avoids generating obstacle edges on auxiliary wall box colliders. Keep
-        # low-step repair only for discontinuous hfield tiles so short stair risers
-        # remain connected without affecting smooth slope/perlin-plane tiles.
         virtual_obstacle_source="mesh",
         virtual_obstacle_hfield_height_threshold=0.04,
         collision_debug_vis=True,

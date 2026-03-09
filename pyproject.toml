@@ -55,8 +55,8 @@ required-environments = [
 url = "https://pypi.org/simple"
 
 [tool.uv.sources]
-mjlab = { path = "../mjlab", editable = true }
-instinct_rl = { path = "../instinct_rl", editable = true }
+mjlab = { git = "https://github.com/mujocolab/mjlab.git" }
+instinct_rl = { git = "https://github.com/project-instinct/instinct_rl.git" }
 
 [tool.setuptools]
 package-dir = {"" = "src"}

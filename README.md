@@ -71,11 +71,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
   uv sync
   ```
 
-- Or install editable packages with `pip`:
+- Or install editable packages from the public repositories with `pip`:
 
   ```bash
-  pip install -e ../mjlab
-  pip install -e ../instinct_rl
+  pip install -e "git+https://github.com/mujocolab/mjlab.git#egg=mjlab"
+  pip install -e "git+https://github.com/project-instinct/instinct_rl.git#egg=instinct_rl"
   pip install -e .
   ```
 
@@ -91,7 +91,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 - [instinct_rl Documentation](https://github.com/project-instinct/instinct_rl/blob/main/README.md)
 - [mjlab Repository](https://github.com/mujocolab/mjlab)
 - [MuJoCo Warp Repository](https://github.com/google-deepmind/mujoco_warp)
-- Local `mjlab` reference in this workspace: `../mjlab`
 - Original InstinctLab repository: `https://github.com/project-instinct/InstinctLab`
 - Original InstinctLab README: `https://github.com/project-instinct/InstinctLab/blob/main/README.md`
 - Shadowing documentation: `src/instinct_mj/tasks/shadowing/README.md`
@@ -157,7 +156,7 @@ Play perceptive shadowing with released weights:
 ```bash
 instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
   --load-run <downloaded_run_dir> \
-  --checkpoint <checkpoint_file>
+  --checkpoint-file <checkpoint_file>
 ```
 
 Pretrained weights:
@@ -254,4 +253,3 @@ Reference links:
 
 - Original repository: `https://github.com/project-instinct/InstinctLab`
 - Original README: `https://github.com/project-instinct/InstinctLab/blob/main/README.md`
-- Local reference in this workspace: `../InstinctLab`

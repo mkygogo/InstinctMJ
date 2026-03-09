@@ -281,8 +281,8 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     if InstinctRlVecEnvWrapper is None:
         raise ImportError(
             "InstinctRlVecEnvWrapper is unavailable. Please install runtime deps:\n"
-            "  pip install -e ../mjlab\n"
-            "  pip install -e ../instinct_rl"
+            '  pip install -e "git+https://github.com/mujocolab/mjlab.git#egg=mjlab"\n'
+            '  pip install -e "git+https://github.com/project-instinct/instinct_rl.git#egg=instinct_rl"'
         )
     device, seed, rank, world_size, is_distributed = _resolve_distributed_runtime(cfg)
 

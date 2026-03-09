@@ -1,29 +1,23 @@
 # BeyondMimic Task
 
-This directory contains the implementation of the BeyondMimic task, which replicates the training configuration from the BeyondMimic whole body tracking approach (https://github.com/HybridRobotics/whole_body_tracking).
+This directory contains the `InstinctMJ` BeyondMimic task, adapted from the original InstinctLab implementation while preserving the BeyondMimic whole-body tracking setup (https://github.com/HybridRobotics/whole_body_tracking).
 
 ## Structure
 
 ```
 beyondmimic/
-├── __init__.py                    # Main module exports
+├── __init__.py                   # Main module exports
 ├── beyondmimic_env_cfg.py        # Base environment configuration
-├── cli_args.py                   # Command line interface arguments
-├── play.py                       # Script to play trained policies
-├── test_integration.py           # Integration test script
 ├── README.md                     # This file
 ├── config/                       # Robot-specific configurations
 │   ├── __init__.py
 │   └── g1/                       # G1 robot configurations
 │       ├── __init__.py
 │       ├── beyondmimic_plane_cfg.py  # G1 plane environment config
+│       ├── rl_cfgs.py            # Instinct-RL runner wiring
 │       └── agents/               # Agent configurations
 │           ├── __init__.py
 │           └── beyondmimic_ppo_cfg.py  # PPO agent config
-└── mdp/                          # MDP components
-    ├── __init__.py
-    ├── curriculums.py            # Curriculum learning terms
-    └── terminations.py           # Termination conditions
 ```
 
 ## Key Features
@@ -48,33 +42,50 @@ The BeyondMimic reward system includes:
 
 ## Usage
 
+### Configure Motion Source
+
+Go to `config/g1/beyondmimic_plane_cfg.py` and set the motion source:
+
+- `MOTION_NAME`: An identifier for the motion setup you are using.
+- `AmassMotionCfg.path`: The folder path to where you store the motion files.
+- `_hacked_selected_file_`: The filename of the motion you want to use, relative to the `AmassMotionCfg.path` folder.
+
 ### Training
-```python
-from instinct_mj.tasks.shadowing.beyondmimic.config.g1.beyondmimic_plane_cfg import G1BeyondMimicPlaneEnvCfg
-from instinct_mj.tasks.shadowing.beyondmimic.config.g1.agents.beyondmimic_ppo_cfg import G1BeyondMimicPPORunnerCfg
 
-# Create environment configuration
-env_cfg = G1BeyondMimicPlaneEnvCfg()
-
-# Create agent configuration
-agent_cfg = G1BeyondMimicPPORunnerCfg()
+```bash
+instinct-train Instinct-BeyondMimic-Plane-G1-v0
 ```
 
 ### Playing Trained Policies
+
 ```bash
-python source/instinct_mj/instinct_mj/tasks/shadowing/beyondmimic/play.py --checkpoint /path/to/checkpoint.pt
+instinct-play Instinct-BeyondMimic-Plane-G1-Play-v0 --load-run <run_name>
 ```
 
+To visualize an untrained policy, use `--agent random`.
+
+### Python Configuration Access
+
+```python
+from instinct_mj.tasks.shadowing.beyondmimic.config.g1.beyondmimic_plane_cfg import g1_beyondmimic_plane_env_cfg
+from instinct_mj.tasks.shadowing.beyondmimic.config.g1.rl_cfgs import g1_beyondmimic_instinct_rl_cfg
+
+# Create environment configuration
+env_cfg = g1_beyondmimic_plane_env_cfg(play=False)
+
+# Create agent configuration
+agent_cfg = g1_beyondmimic_instinct_rl_cfg()
+```
 
 ## Differences from Original BeyondMimic
 
-While following the BeyondMimic approach, this implementation adapts to the current codebase's design patterns:
+While following the BeyondMimic approach, this implementation adapts to the current codebase's `InstinctMJ` / `mjlab` patterns:
 
-1. **Configuration Structure**: Uses the existing `@dataclass(kw_only=True)` pattern and configuration hierarchy
-2. **MDP Components**: Integrates with existing MDP functions and reward terms
-3. **Asset Integration**: Uses the existing G1 robot asset configurations
-4. **Motion Reference**: Leverages the existing motion reference system
-5. **Monitoring**: Uses the existing monitoring and logging infrastructure
+1. **Task Registration**: Registers train/play tasks through `register_instinct_task()`
+2. **Environment Factory**: Uses `g1_beyondmimic_plane_env_cfg(play=...)` to switch between train and play setup
+3. **Manager Style**: Keeps manager configuration in native `mjlab` / `InstinctMJ` terms without a compatibility layer
+4. **Asset Integration**: Uses the G1 MJCF asset and `instinct_mj` motion reference stack
+5. **Training Workflow**: Runs through the shared `instinct-train` / `instinct-play` entry points
 
 ## Motion Data
 
@@ -85,5 +96,7 @@ The configuration is set up to use the Ubisoft LAFAN-1 dataset with GMR retarget
 
 ## References
 
+- Original InstinctLab README:
+  `https://github.com/project-instinct/InstinctLab/blob/main/source/instinctlab/instinctlab/tasks/shadowing/beyondmimic/README.md`
 - BeyondMimic: https://github.com/HybridRobotics/whole_body_tracking
 - LAFAN-1 Dataset: https://github.com/ubisoft/ubisoft-laforge-animation-dataset

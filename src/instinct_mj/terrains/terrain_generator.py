@@ -247,14 +247,12 @@ class FiledTerrainGenerator(TerrainGenerator):
         # consistently flat outer ring before tile stitching.
         stitch_border_width = max(wall_thickness, cfg_border_width, global_stitch_border_width)
         if stitch_border_width > 0.0:
-            # Match legacy InstinctLab border discretization semantics used by
             # `height_field_to_mesh`: `int(width / scale) + 1`.
             # This avoids a one-pixel under-coverage when width is an exact
             # multiple of the resolution (for example 1.5m / 0.05m).
             stitch_border_pixels = max(int(stitch_border_width / resolution) + 1, 1)
         else:
             stitch_border_pixels = 1
-        # Keep InstinctLab-equivalent terrain tiling semantics:
         # outer tile borders are on a shared flat plane (z=0), so all terrain
         # seams stay level and gap-free independent of sub-terrain internals.
         stitch_height = 0.0

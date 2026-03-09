@@ -413,8 +413,8 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
     if InstinctRlVecEnvWrapper is None:
         raise ImportError(
             "InstinctRlVecEnvWrapper is unavailable. Please install runtime deps:\n"
-            "  pip install -e ../mjlab\n"
-            "  pip install -e ../instinct_rl"
+            '  pip install -e "git+https://github.com/mujocolab/mjlab.git#egg=mjlab"\n'
+            '  pip install -e "git+https://github.com/project-instinct/instinct_rl.git#egg=instinct_rl"'
         )
     configure_torch_backends()
     viewer_backend = _resolve_viewer_backend(cfg.viewer)

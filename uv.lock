@@ -1043,9 +1043,9 @@ dependencies = [
 requires-dist = [
     { name = "coacd" },
     { name = "gymnasium", specifier = ">=0.29" },
-    { name = "instinct-rl", editable = "../instinct_rl" },
+    { name = "instinct-rl", git = "https://github.com/project-instinct/instinct_rl.git" },
     { name = "mediapy", specifier = ">=1.2.0" },
-    { name = "mjlab", editable = "../mjlab" },
+    { name = "mjlab", git = "https://github.com/mujocolab/mjlab.git" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "numpy-quaternion" },
     { name = "onnxruntime" },
@@ -1063,7 +1063,7 @@ requires-dist = [
 [[package]]
 name = "instinct-rl"
 version = "1.0.2"
-source = { editable = "../instinct_rl" }
+source = { git = "https://github.com/project-instinct/instinct_rl.git#3a2844890387eda6d93a4465cdef9e767aba8546" }
 dependencies = [
     { name = "gitpython" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -1075,19 +1075,6 @@ dependencies = [
     { name = "tensorboardx" },
     { name = "torch" },
     { name = "torchvision" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "gitpython" },
-    { name = "numpy", specifier = ">=1.16.4" },
-    { name = "onnx" },
-    { name = "onnxscript" },
-    { name = "tabulate" },
-    { name = "tensorboard" },
-    { name = "tensorboardx" },
-    { name = "torch", specifier = ">=2.4.0" },
-    { name = "torchvision", specifier = ">=0.5.0" },
 ]
 
 [[package]]
@@ -1684,7 +1671,7 @@ wheels = [
 [[package]]
 name = "mjlab"
 version = "1.2.0"
-source = { editable = "../mjlab" }
+source = { git = "https://github.com/mujocolab/mjlab.git#be04d464e70e36b4fe009a207282dca6038cd113" }
 dependencies = [
     { name = "imageio-ffmpeg" },
     { name = "mediapy" },
@@ -1705,58 +1692,6 @@ dependencies = [
     { name = "viser" },
     { name = "wandb" },
     { name = "warp-lang" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "imageio-ffmpeg" },
-    { name = "mediapy", specifier = ">=1.2.6" },
-    { name = "mujoco", specifier = ">=3.5.0", index = "https://py.mujoco.org/" },
-    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=5a86ec28aa07741eb2e000d158f4ca4068ec146e" },
-    { name = "onnxscript", specifier = ">=0.5.4" },
-    { name = "prettytable" },
-    { name = "rsl-rl-lib", specifier = "==5.0.1" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
-    { name = "tensordict" },
-    { name = "torch", specifier = ">=2.7.0" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'cpu'", specifier = ">=2.7.0" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'cu128'", specifier = ">=2.7.0" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cpu'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "mjlab", extra = "cpu" } },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cu128'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "mjlab", extra = "cu128" } },
-    { name = "torchrunx", specifier = ">=0.3.4" },
-    { name = "tqdm" },
-    { name = "trimesh", specifier = ">=4.8.3" },
-    { name = "tyro", specifier = ">=1.0.1" },
-    { name = "viser", specifier = ">=1.0.24" },
-    { name = "wandb", specifier = ">=0.22.3" },
-    { name = "warp-lang", marker = "sys_platform != 'darwin'", specifier = ">=1.12.0", index = "https://pypi.nvidia.com/" },
-    { name = "warp-lang", marker = "sys_platform == 'darwin'", specifier = ">=1.12.0" },
-]
-provides-extras = ["cu128", "cpu"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ipdb", specifier = ">=0.13.13" },
-    { name = "pre-commit", specifier = ">=4.3.0" },
-    { name = "pyright", specifier = ">=1.1.408" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "ruff", specifier = ">=0.14.14" },
-    { name = "ty", specifier = ">=0.0.14" },
-]
-docs = [
-    { name = "autodocsumm" },
-    { name = "myst-parser", specifier = ">=4.0.1" },
-    { name = "sphinx", specifier = ">=8.1.3" },
-    { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=3.0.1" },
-    { name = "sphinx-book-theme", specifier = ">=1.1.4" },
-    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
-    { name = "sphinx-design", specifier = ">=0.6.1" },
-    { name = "sphinx-icon" },
-    { name = "sphinx-multiversion" },
-    { name = "sphinx-tabs" },
-    { name = "sphinxcontrib-bibtex" },
-    { name = "sphinxemoji" },
 ]
 
 [[package]]

@@ -44,8 +44,6 @@ class TerrainImporter(TerrainImporterBase):
         runtime_terrain_type = cfg.terrain_type
         if runtime_terrain_type == "hacked_generator":
             self._hacked_terrain_type = "hacked_generator"
-            # Keep source control flow: hacked_generator enters plane branch and is
-            # intercepted inside import_ground_plane().
             runtime_terrain_type = "plane"
 
         self._debug_vis_enabled = False

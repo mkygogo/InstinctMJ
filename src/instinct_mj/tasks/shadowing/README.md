@@ -1,16 +1,14 @@
 # Shadowing Task
 
+This README follows the original InstinctLab shadowing usage notes, adapted to the `InstinctMJ` task registry and CLI.
+
 ## InstinctLab Original Sources
 
-- InstinctLab repository: `https://github.com/project-instinct/instinctlab`
+- InstinctLab repository: `https://github.com/project-instinct/InstinctLab`
 - Original shadowing README:
-  `https://github.com/project-instinct/instinctlab/blob/main/source/instinctlab/instinctlab/tasks/shadowing/README.md`
+  `https://github.com/project-instinct/InstinctLab/blob/main/source/instinctlab/instinctlab/tasks/shadowing/README.md`
 - Original perceptive shadowing config:
-  `source/instinctlab/instinctlab/tasks/shadowing/perceptive/config/g1/perceptive_shadowing_cfg.py`
-- Local shadowing README in this workspace:
-  `../InstinctLab/source/instinctlab/instinctlab/tasks/shadowing/README.md`
-- Local perceptive shadowing config in this workspace:
-  `../InstinctLab/source/instinctlab/instinctlab/tasks/shadowing/perceptive/config/g1/perceptive_shadowing_cfg.py`
+  `https://github.com/project-instinct/InstinctLab/blob/main/source/instinctlab/instinctlab/tasks/shadowing/perceptive/config/g1/perceptive_shadowing_cfg.py`
 
 ## Prerequisite
 
@@ -37,7 +35,7 @@ This is an exact replication of the BeyondMimic training configuration.
 instinct-train Instinct-BeyondMimic-Plane-G1-v0
 ```
 
-3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--no-resume` for untrained policy):
+3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--agent random` for an untrained policy):
 ```bash
 instinct-play Instinct-BeyondMimic-Plane-G1-Play-v0 --load-run <run_name>
 ```
@@ -59,7 +57,7 @@ instinct-play Instinct-BeyondMimic-Plane-G1-Play-v0 --load-run <run_name>
 instinct-train Instinct-Shadowing-WholeBody-Plane-G1-v0
 ```
 
-3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--no-resume` for untrained policy):
+3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--agent random` for an untrained policy):
 ```bash
 instinct-play Instinct-Shadowing-WholeBody-Plane-G1-Play-v0 --load-run <run_name>
 ```
@@ -79,7 +77,7 @@ instinct-play Instinct-Shadowing-WholeBody-Plane-G1-Play-v0 --load-run <run_name
 instinct-train Instinct-Perceptive-Shadowing-G1-v0
 ```
 
-3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--no-resume` for untrained policy):
+3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--agent random` for an untrained policy):
 ```bash
 instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
 ```
@@ -92,13 +90,15 @@ instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
 ```bash
 instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
   --load-run <downloaded_run_dir> \
-  --checkpoint <checkpoint_file>
+  --checkpoint-file <checkpoint_file>
 ```
 
 ## Common Options
 
 - `--num-envs`: Number of parallel environments (default varies by task)
 - `--load-run`: Run name/path pattern to select a checkpoint for play
+- `--checkpoint-file`: Explicit checkpoint file to load inside the selected run
+- `--agent`: Action source for play, e.g. `trained`, `random`, or `zero`
 - `--device`: Runtime device, e.g. `cuda:0`
 - `--viewer`: Viewer backend (`none`/`native` for train, `auto`/`native`/`viser`/`none` for play)
 - `--video`: Record training/playback videos
@@ -106,6 +106,6 @@ instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
 Module form (if console scripts are not available):
 
 ```bash
-python -m instinct_mj.scripts.instinct_rl.train Instinct-Perceptive-Shadowing-G1-v0
-python -m instinct_mj.scripts.instinct_rl.play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
+python -m instinct_mj.scripts.instinct_rl.train Instinct-BeyondMimic-Plane-G1-v0
+python -m instinct_mj.scripts.instinct_rl.play Instinct-BeyondMimic-Plane-G1-Play-v0 --load-run <run_name>
 ```
