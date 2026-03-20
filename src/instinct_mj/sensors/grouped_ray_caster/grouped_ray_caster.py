@@ -47,21 +47,53 @@ class GroupedRayCaster(RayCastSensor):
 
     def initialize(self, mj_model, model, data, device: str) -> None:
         super().initialize(mj_model, model, data, device)
+        frame_infos = getattr(self, "_frame_infos", None)
+        if frame_infos is not None:
+            if len(frame_infos) != 1:
+                raise ValueError(
+                    f"{self.__class__.__name__} currently supports exactly one frame, got {len(frame_infos)}."
+                )
+            frame_type, obj_id, body_id = frame_infos[0]
+            self._frame_type = frame_type
+            self._frame_body_id = body_id
+            self._frame_site_id = obj_id if frame_type == "site" else -1
+            self._frame_geom_id = obj_id if frame_type == "geom" else -1
+        elif self._frame_type not in {"body", "site", "geom"} or self._frame_body_id < 0:
+            frames = self.cfg.frame
+            if not isinstance(frames, tuple):
+                frames = (frames,)
+            if len(frames) != 1:
+                raise ValueError(
+                    f"{self.__class__.__name__} currently supports exactly one frame, got {len(frames)}."
+                )
+            frame = frames[0]
+            frame_name = frame.prefixed_name() if hasattr(frame, "prefixed_name") else frame.name
+            self._frame_type = frame.type
+            if frame.type == "body":
+                self._frame_body_id = mj_model.body(frame_name).id
+                self._frame_site_id = -1
+                self._frame_geom_id = -1
+            elif frame.type == "site":
+                self._frame_site_id = mj_model.site(frame_name).id
+                self._frame_body_id = int(mj_model.site_bodyid[self._frame_site_id])
+                self._frame_geom_id = -1
+            elif frame.type == "geom":
+                self._frame_geom_id = mj_model.geom(frame_name).id
+                self._frame_body_id = int(mj_model.geom_bodyid[self._frame_geom_id])
+                self._frame_site_id = -1
+            else:
+                raise ValueError(
+                    f"{self.__class__.__name__} frame must be 'body', 'site', or 'geom', got '{frame.type}'."
+                )
 
-        if len(self._frame_infos) != 1:
-            raise ValueError(
-                f"{self.__class__.__name__} currently supports exactly one frame, got {len(self._frame_infos)}."
+        if self._frame_type == "site":
+            self._frame_local_pos = torch.as_tensor(
+                mj_model.site_pos[self._frame_site_id], device=device, dtype=torch.float32
             )
-
-        frame_type, obj_id, body_id = self._frame_infos[0]
-        self._frame_type = frame_type
-        self._frame_body_id = body_id
-        self._frame_site_id = obj_id if frame_type == "site" else -1
-        self._frame_geom_id = obj_id if frame_type == "geom" else -1
-        if frame_type == "site":
-            self._frame_local_pos = torch.as_tensor(mj_model.site_pos[obj_id], device=device, dtype=torch.float32)
-        elif frame_type == "geom":
-            self._frame_local_pos = torch.as_tensor(mj_model.geom_pos[obj_id], device=device, dtype=torch.float32)
+        elif self._frame_type == "geom":
+            self._frame_local_pos = torch.as_tensor(
+                mj_model.geom_pos[self._frame_geom_id], device=device, dtype=torch.float32
+            )
         else:
             self._frame_local_pos = torch.zeros(3, device=device, dtype=torch.float32)
 
