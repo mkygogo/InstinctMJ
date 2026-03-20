@@ -22,6 +22,11 @@ class GroupedRayCaster(RayCastSensor):
         super().__init__(cfg)
         self._num_envs = 0
         self._ALL_INDICES = torch.empty(0, dtype=torch.long)
+        self._frame_type: str | None = None
+        self._frame_body_id: int = -1
+        self._frame_site_id: int = -1
+        self._frame_geom_id: int = -1
+        self._frame_local_pos = torch.zeros(3, dtype=torch.float32)
         self.drift: torch.Tensor | None = None
         self.ray_starts: torch.Tensor | None = None
         self.ray_directions: torch.Tensor | None = None
@@ -42,6 +47,23 @@ class GroupedRayCaster(RayCastSensor):
 
     def initialize(self, mj_model, model, data, device: str) -> None:
         super().initialize(mj_model, model, data, device)
+
+        if len(self._frame_infos) != 1:
+            raise ValueError(
+                f"{self.__class__.__name__} currently supports exactly one frame, got {len(self._frame_infos)}."
+            )
+
+        frame_type, obj_id, body_id = self._frame_infos[0]
+        self._frame_type = frame_type
+        self._frame_body_id = body_id
+        self._frame_site_id = obj_id if frame_type == "site" else -1
+        self._frame_geom_id = obj_id if frame_type == "geom" else -1
+        if frame_type == "site":
+            self._frame_local_pos = torch.as_tensor(mj_model.site_pos[obj_id], device=device, dtype=torch.float32)
+        elif frame_type == "geom":
+            self._frame_local_pos = torch.as_tensor(mj_model.geom_pos[obj_id], device=device, dtype=torch.float32)
+        else:
+            self._frame_local_pos = torch.zeros(3, device=device, dtype=torch.float32)
 
         self._min_distance = float(self.cfg.min_distance)
         if self._min_distance < 0.0:
